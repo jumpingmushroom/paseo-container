@@ -33,6 +33,9 @@ that container; this design needs no migration step.
 - Reach the daemon on the LAN with a direct connection as a fallback.
 - Keep agents running when clients disconnect.
 - Install Claude Code and Codex through the existing `AGENTS` mechanism.
+- Give agents `gh`, outbound SSH, single-binary tools such as `kubectl` and
+  `talosctl`, Python and npm CLIs such as the OpenStack client, and MCP
+  servers, with their configuration surviving a container recreate.
 - Let the folder picker in the apps suggest folders from the source share.
 - Keep the Paseo version pinned and reproducible, with a daily automated bump
   PR.
@@ -62,6 +65,9 @@ that container; this design needs no migration step.
 | Source share mount | `/home/paseo/workspace`, with `/workspace` as a symlink | Works around Paseo issue #1787 (see [Folder suggestions](#folder-suggestions)) |
 | Appdata path | `/mnt/user/appdata/paseo-container` | Operator requirement |
 | Logins | Fresh `claude` and `codex` logins in this container | Copied OAuth refresh tokens can invalidate each other |
+| GitHub CLI | `gh` baked into the image, pinned by version and sha256 | Nearly every agent workflow uses it |
+| Single-binary tools | New `BIN_TOOLS` variable, installed into `/config/tools/bin` | `kubectl` and `talosctl` ship on neither npm nor PyPI |
+| Tool configuration | New `HOME_PERSIST` variable links home-directory paths into `/config/home` | `gh` auth, kubeconfig, talosconfig, and `clouds.yaml` otherwise vanish on recreate |
 
 ## Architecture
 
@@ -75,6 +81,8 @@ The Dockerfile keeps herdr-container's `runtime` stage and drops the
 - `ARG PASEO_VERSION=0.11.2`. A `RUN npm install -g "@getpaseo/cli@${PASEO_VERSION}"`
   layer installs Paseo into `/usr/local`. npm verifies package integrity, so
   the Dockerfile carries no separate checksum for Paseo.
+- `gh`, from GitHub's release tarball, pinned by `ARG GH_VERSION` and a
+  sha256 per architecture, installed into `/usr/local/bin`.
 - `ENV DISABLE_AUTOUPDATER=1`, kept from herdr-container, stops Claude Code
   from updating itself.
 - A `paseo` user and group replace `herdr`, with home directory `/home/paseo`.
@@ -89,8 +97,8 @@ The Dockerfile keeps herdr-container's `runtime` stage and drops the
 | `01-user-setup` | oneshot | Unchanged: `PUID` (default `99`), `PGID` (default `100`), `UMASK`, and `TZ`. Chowns `/config` recursively and the workspace mount point only. |
 | `02-config-scaffold` | oneshot | Keeps git identity and `GIT_TOKEN` seeding. Drops herdr's `config.toml` seeding. Adds Paseo seeding, described below. |
 | `03-ssh-keys` | oneshot | Unchanged: host keys, `authorized_keys`, outbound identity, and `known_hosts`. |
-| `04-agents` | oneshot | Unchanged installer contract and the `claude` and `codex` installers. Drops `agent_integration` and the `HERDR_INTEGRATIONS` variable. |
-| `05-tools` | oneshot | Unchanged: `NPM_TOOLS`, `PYTHON_TOOLS`, and `APT_PACKAGES`. |
+| `04-agents` | oneshot | Unchanged installer contract and the `claude` and `codex` installers. Drops `agent_integration` and the `HERDR_INTEGRATIONS` variable. Adds the `HOME_PERSIST` links, described below. |
+| `05-tools` | oneshot | Keeps `NPM_TOOLS`, `PYTHON_TOOLS`, and `APT_PACKAGES`. Adds `BIN_TOOLS`, described below. |
 | `06-paseo-prep` | oneshot | Deletes `/config/paseo/paseo.pid`. Depends on `05-tools`. |
 | `paseo-daemon` | longrun | Runs Paseo's supervisor as the `paseo` user. Depends on `06-paseo-prep`. |
 | `sshd` | longrun | Unchanged, user `paseo`. |
@@ -117,6 +125,42 @@ variable locks the setting and the app then cannot turn the relay off.
 When `PASEO_PASSWORD` is empty and `/config/paseo/password` does not exist, the
 oneshot generates a random password into that file with mode `0600`, owned by
 `paseo`.
+
+#### `HOME_PERSIST` in `04-agents`
+
+`HOME_PERSIST` lists home-directory-relative paths, separated by spaces. A path
+ending in `/` is a directory. Before it installs any agent, `04-agents` links
+each path from `/home/paseo` into `/config/home`, with the same linking code
+that persists each agent's `agent_persist_paths`. The default is
+`.config/ .kube/ .talos/`, which covers:
+
+- `gh` credentials in `~/.config/gh`.
+- The OpenStack client's `~/.config/openstack/clouds.yaml`.
+- `~/.kube/config` for `kubectl`.
+- `~/.talos/config` for `talosctl`.
+
+To persist another tool's configuration, such as `.aws/` or `.docker/`, add
+its path to the variable.
+
+#### `BIN_TOOLS` in `05-tools`
+
+`BIN_TOOLS` lists single-binary tools as `name=url` pairs, separated by spaces.
+For each pair, `05-tools` downloads the URL to `/config/tools/bin/<name>`, marks
+it executable, and records the pair in `/config/tools/.installed`, so later
+boots skip it. A URL that ends in `#sha256=<hex>` is verified against that
+digest before installation, and a mismatch logs a warning and installs
+nothing. `TOOL_UPDATE=1` reinstalls every pair. A failed download logs a
+warning and the container keeps booting.
+
+The URL names the version, so you pin each tool yourself. `talosctl` needs
+this, because its version must match the cluster's Talos version:
+
+```text
+BIN_TOOLS="kubectl=https://dl.k8s.io/release/v1.34.1/bin/linux/amd64/kubectl talosctl=https://github.com/siderolabs/talos/releases/download/v1.11.2/talosctl-linux-amd64"
+```
+
+`BIN_TOOLS` installs raw binaries only, not archives. A tool that ships only
+as an archive belongs in your own image built from this one.
 
 #### `06-paseo-prep`
 
@@ -182,6 +226,8 @@ The script starts in `/home/paseo/workspace` and applies the `UMASK` that
   paseo/push-tokens.json         phone push registrations
   paseo/daemon.log               rotating daemon log
   ssh/  git/  tools/             unchanged from herdr-container
+  tools/bin/                     also holds BIN_TOOLS binaries
+  home/                          HOME_PERSIST targets: .config/, .kube/, .talos/
   agents/bin/                    claude and codex executables
   agents/state/                  .claude/, .claude.json, .codex/
 /home/paseo/workspace            the source share
@@ -189,7 +235,8 @@ The script starts in `/home/paseo/workspace` and applies the `UMASK` that
 ```
 
 `/home/paseo` itself is not persisted. `04-agents` links each agent's persist
-paths from `/home/paseo` into `/config/agents/state`, as in herdr-container. At
+paths from `/home/paseo` into `/config/agents/state`, as in herdr-container,
+and each `HOME_PERSIST` path into `/config/home`. At
 startup, Paseo writes orchestration skills into `~/.agents/skills`,
 `~/.claude/skills`, and `~/.codex/skills`. The `.claude` and `.codex` copies
 persist through the agent links; Paseo regenerates `~/.agents` on every start.
@@ -216,6 +263,25 @@ docker exec -it -u paseo paseo-container codex login
 ```
 
 You can also sign in over SSH on port 2223.
+
+### Tools and MCP servers
+
+- **Outbound SSH.** Agents use the container's own key in
+  `/config/ssh/id_ed25519`, with host aliases in `/config/ssh/config`, as in
+  herdr-container.
+- **GitHub CLI.** To sign in, run `gh auth login` once in the container, or set
+  `GH_TOKEN`. The credential persists in `~/.config/gh`.
+- **Python and npm CLIs.** `PYTHON_TOOLS="python-openstackclient"` and
+  `NPM_TOOLS` work as in herdr-container.
+- **Single-binary tools.** `BIN_TOOLS` installs `kubectl`, `talosctl`, and
+  similar tools.
+- **MCP servers.** Paseo starts Claude Code with the `user`, `project`, and
+  `local` setting sources, so servers registered with
+  `claude mcp add --scope user` and a project's `.mcp.json` load in Paseo
+  agents. Codex reads `mcp_servers` from `~/.codex/config.toml`. `npx` and
+  `uvx` ship in the image. The container gets no Docker socket; run
+  Docker-based MCP servers as their own containers and connect over HTTP or
+  SSE.
 
 ## Connectivity and security
 
@@ -360,6 +426,9 @@ The container reads every herdr-container variable except `HERDR_INTEGRATIONS`,
 | --- | --- | --- |
 | `PASEO_PASSWORD` | empty | Password for direct connections. When empty, the container generates one into `/config/paseo/password`. |
 | `PASEO_HOSTNAMES` | empty | Extra `Host` header values the daemon accepts, comma-separated. |
+| `BIN_TOOLS` | empty | Single-binary tools as `name=url` pairs, installed into `/config/tools/bin`. |
+| `HOME_PERSIST` | `.config/ .kube/ .talos/` | Home-directory paths linked into `/config/home`. |
+| `GH_TOKEN` | empty | Token for `gh`, passed through to agents. Optional when you sign in with `gh auth login`. |
 
 `AGENTS` defaults to `claude,codex` in the Unraid template.
 
@@ -377,7 +446,8 @@ matches how herdr-container handled `HERDR_GUI_PASSWORD`.
   `/home/paseo/workspace` to the source share.
 - **Variables:** `AGENTS`, `PASEO_PASSWORD` (masked), `PASEO_HOSTNAMES`,
   `SSH_PUBKEY`, `GIT_USER_NAME`, `GIT_USER_EMAIL`, `GIT_TOKEN` (masked),
-  `GIT_TOKEN_HOST`, `NPM_TOOLS`, `PYTHON_TOOLS`, `APT_PACKAGES`,
+  `GIT_TOKEN_HOST`, `GH_TOKEN` (masked), `NPM_TOOLS`, `PYTHON_TOOLS`,
+  `BIN_TOOLS`, `HOME_PERSIST`, `APT_PACKAGES`,
   `AGENT_UPDATE`, `TOOL_UPDATE`, `PUID`, `PGID`, `UMASK`, and `TZ`.
 - **Extra Parameters:** `--hostname=paseo --stop-timeout=30`.
 - **WebUI:** `http://[IP]:[PORT:6767]/`.
@@ -402,7 +472,9 @@ The banner at the end of the boot sequence prints:
   is not `X.Y.Z`, compares it with `ARG PASEO_VERSION`, and when they differ
   opens a PR that bumps the argument. Paseo's client-server protocol only adds
   optional fields and gates new features on capability flags, so a daemon a few
-  days behind the apps keeps working.
+  days behind the apps keeps working. The same job checks the latest `gh`
+  release and, when it differs from `ARG GH_VERSION`, bumps the version and
+  both sha256 arguments from the release's checksums file.
 
 ## Testing
 
@@ -421,8 +493,14 @@ with a test `/config`, and asserts:
 7. `paseo daemon pair --json` returns a pairing URL.
 8. `/workspace` is a symlink to `/home/paseo/workspace`, and the mounted share
    is visible there.
-9. The existing SSH login, `PUID`/`PGID`, and tool-install assertions pass.
-10. A daemon self-update request fails, and the installed Paseo version is
+9. `gh --version` succeeds as the `paseo` user.
+10. A `BIN_TOOLS` pair served from a local test HTTP server installs into
+    `/config/tools/bin`, a wrong `#sha256=` installs nothing, and a second boot
+    skips the installed pair.
+11. A file written to `~/.kube/config` survives recreating the container
+    against the same `/config`.
+12. The existing SSH login, `PUID`/`PGID`, and tool-install assertions pass.
+13. A daemon self-update request fails, and the installed Paseo version is
     unchanged.
 
 The test run has no outbound access to the relay or agent APIs. A manual
@@ -434,7 +512,8 @@ disconnecting every client mid-turn, and confirming the turn finishes.
 - `README.md`: quick start, pairing, the Syncthing note, and attribution.
 - `docs/configuration.md`: every variable and volume.
 - `docs/agents.md`: the installer contract, without the herdr integration.
-- `docs/tools.md`: carried over.
+- `docs/tools.md`: carried over, plus `gh`, `BIN_TOOLS`, `HOME_PERSIST`, and
+  how Paseo agents load MCP servers.
 - `docs/security.md`: pairing links as credentials, keypair rotation, the LAN
   password, the no-port-forward rule, and the outbound SSH key and git token.
 - `docs/unraid.md`: install, sign-in, pairing, auto-update and backup
