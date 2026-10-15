@@ -67,6 +67,14 @@ LAN password, leave `PASEO_PASSWORD` empty and let the container generate the
 file. Even then the daemon, and so its agents, receive the password in the
 environment, because that is how the daemon reads it.
 
+## The web UI cannot be turned off
+
+The daemon's run script sets `PASEO_WEB_UI_ENABLED=true`. Paseo locks any
+setting that an environment variable sets, so the app can't turn the web UI
+off. The daemon serves the web UI on port 6767, so everything
+[the LAN password](#the-lan-password) section says about that port applies to
+it: it is plain HTTP, and it belongs on a LAN you trust.
+
 ## Self-update is blocked
 
 The Paseo app shows an **Update** button for the daemon. Its request would run
@@ -165,7 +173,7 @@ offering the key, and the next boot generates a replacement.
 ## The outbound git credential
 
 `GIT_TOKEN` and `/config/git/credentials` control what the container can reach
-out and write to. They exist so an agent can push the work it just did.
+out and write to. They exist so an agent can push the work it has done.
 
 Treat the token as readable by everything in the container. The `paseo` user
 owns it, every agent runs as that user, and those agents execute code they
@@ -184,10 +192,12 @@ because a `/config` restored from a backup can arrive world-readable.
 
 ### Keep the token out of the environment
 
-`GIT_TOKEN` is convenient, because an Unraid template can edit it. But an
-environment variable is visible in `/proc/1/environ` to anything in the
-container, every agent inherits it, and it sits in your template where you may
-not expect it. To avoid that, leave the variable empty and write the file
+`GIT_TOKEN` is convenient, because an Unraid template can edit it. But the
+daemon passes the variable on to every agent, and any process that runs as
+`paseo` can read it from the daemon's `/proc/<pid>/environ`. PID 1 runs as
+root, so the `paseo` user can't read `/proc/1/environ`, but that protects
+nothing: each agent already holds the token in its own environment. The
+variable also sits in your template, where you may not expect it. To avoid that, leave the variable empty and write the file
 yourself:
 
 ```bash

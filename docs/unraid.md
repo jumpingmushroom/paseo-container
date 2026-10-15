@@ -120,6 +120,12 @@ this checklist by hand after a new release:
 4. Reopen an app and confirm the turn finished.
 5. Restart the container, reopen the app, and confirm the agent resumes when
    you prompt it.
+6. Back up `/config` while the container runs. Restore the backup into a fresh
+   appdata directory, point a container at it, and confirm that the container
+   boots and your paired devices and agent sign-ins still work.
+7. In the desktop app, add the host with the **Remote SSH** host type, using
+   `ssh://paseo@<tower>:2223`, where `<tower>` is your server's name or IP
+   address. Confirm that the app connects.
 
 ## Update the image
 

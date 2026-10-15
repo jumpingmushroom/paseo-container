@@ -33,8 +33,8 @@ a `docker run` flag rather than a variable.
 - **Default:** `99`
 - **Effect:** Sets the UID of the `paseo` user. The `01-user-setup` oneshot
   compares the user's current UID to `PUID` and runs `usermod` when they
-  differ, then chowns `/config` and the home directory to match. The share
-  mounted inside the home directory is excluded from that chown. `99` is
+  differ, then claims every file in `/config` and the home directory whose
+  owner differs. The share mounted inside the home directory is excluded. `99` is
   Unraid's `nobody` account.
 - **Example:** `1000`
 
@@ -42,8 +42,9 @@ a `docker run` flag rather than a variable.
 
 - **Default:** `100`
 - **Effect:** Sets the GID of the `paseo` group. `01-user-setup` runs
-  `groupmod` when the current GID differs from `PGID`, then chowns `/config`
-  and the share's mount point to `PUID:PGID`. `100` is Unraid's `users`
+  `groupmod` when the current GID differs from `PGID`, then chowns every file
+  in `/config` whose owner or group differs, and the share's mount point, to
+  `PUID:PGID`. `100` is Unraid's `users`
   group. If your source share is already group-owned by a different GID, set
   `PGID` to match it. Otherwise the container claims the mount point under its
   own group the first time it boots.
@@ -199,8 +200,10 @@ a `docker run` flag rather than a variable.
   `/` marks a directory, and an entry without one marks a file. The container
   ignores an entry, with a warning in the log, when it is an absolute path,
   contains a `..` segment, names the home directory itself, or overlaps the
-  share (it is the share's mount point, or sits above or below it). The
-  default covers `gh` credentials, the OpenStack `clouds.yaml`, `kubectl`'s
+  share (it is the share's mount point, or sits above or below it). It also
+  ignores an entry that equals or sits inside an earlier one, such as
+  `.config/gh/` after `.config/`, because the earlier link already persists
+  it. The default covers `gh` credentials, the OpenStack `clouds.yaml`, `kubectl`'s
   config, and `talosctl`'s config. See
   [tool configuration persists with `HOME_PERSIST`](tools.md#tool-configuration-persists-with-home_persist).
 - **Example:** `.config/ .kube/ .talos/ .aws/ .docker/`
@@ -258,8 +261,11 @@ not lose on a recreate:
   agents/state/                  .claude/, .claude.json, .codex/
 ```
 
-`01-user-setup` chowns `/config` recursively to `PUID:PGID` on every boot,
-because it is small and always belongs to the container.
+`/config` always belongs to the container, so on every boot `01-user-setup`
+walks it and chowns to `PUID:PGID` each entry whose owner or group differs.
+`/config` grows over time with agent state, tool caches, and Paseo's
+worktrees, `node_modules` included, so the walk leaves correctly owned entries
+alone instead of rewriting every one of them on each boot.
 
 On the first boot that finds no `/config/paseo/config.json`,
 `02-config-scaffold` writes one that turns the relay on. The container never
@@ -363,11 +369,20 @@ default. Set the name when you create the container:
 Any name works. The examples use `paseo`. Pick something short, because you
 read it in the prompt on every line.
 
+## The web UI is always on
+
+The daemon's run script sets `PASEO_WEB_UI_ENABLED=true`, which serves
+Paseo's web UI on port 6767. Paseo treats a setting that comes from an
+environment variable as locked, so you can't turn the web UI off from the app
+or with `paseo daemon config set`. See
+[the web UI cannot be turned off](security.md#the-web-ui-cannot-be-turned-off).
+
 ## Stop timeout
 
 Set `--stop-timeout 30` (Compose: `stop_grace_period: 30s`). On `SIGTERM`, the
 Paseo supervisor tells the worker to shut down. The worker closes each agent
 with a 5-second timeout, saves state, and exits within 10 seconds, and the
 supervisor kills the worker after 10 more seconds. The s6 service grace time
-matches the 30-second timeout. Docker's default of 10 seconds can cut that
-short. The Unraid template sets the flag for you.
+is 25 seconds (`S6_SERVICES_GRACETIME=25000`), so s6 finishes stopping the
+services inside Docker's 30-second timeout. Docker's default of 10 seconds can
+cut that short. The Unraid template sets the flag for you.
