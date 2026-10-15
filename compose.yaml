@@ -32,6 +32,7 @@ services:
       # /config/tools install path at all.
       NPM_TOOLS: "${NPM_TOOLS-json}"
       PYTHON_TOOLS: "${PYTHON_TOOLS-yq}"
+      BIN_TOOLS: "${BIN_TOOLS-}"
       TOOL_UPDATE: "${TOOL_UPDATE:-0}"
       # Obviously fake, and it never leaves tests/.tmp: the suite asserts how
       # the credential is stored, not that it authenticates anywhere.

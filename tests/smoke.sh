@@ -404,6 +404,33 @@ wait_for "container boots with AGENTS empty" 240 boot_complete
 assert_ok "no agents installed when AGENTS is empty" \
     dexec sh -c 'test -z "$(find /config/agents/bin -mindepth 1)"'
 
+echo "== BIN_TOOLS =="
+mkdir -p "$TMP_DIR/config/fixtures"
+printf '#!/bin/sh\necho hello-bin\n' > "$TMP_DIR/config/fixtures/hello"
+GOOD_SHA="$(sha256sum "$TMP_DIR/config/fixtures/hello" | cut -d' ' -f1)"
+BAD_SHA="0000000000000000000000000000000000000000000000000000000000000000"
+"${COMPOSE[@]}" down >/dev/null
+BIN_TOOLS="hello=file:///config/fixtures/hello#sha256=${GOOD_SHA} badsum=file:///config/fixtures/hello#sha256=${BAD_SHA} missing=file:///config/fixtures/does-not-exist" \
+    "${COMPOSE[@]}" up -d
+wait_for "container boots with BIN_TOOLS" 240 boot_complete
+assert_eq "a BIN_TOOLS binary runs" "hello-bin" \
+    "$(dexec_user /config/tools/bin/hello 2>/dev/null | tr -d '\r')"
+assert_eq "a BIN_TOOLS binary is owned by paseo" "paseo" \
+    "$(dexec stat -c '%U' /config/tools/bin/hello | tr -d '\r')"
+assert_fail "a wrong checksum installs nothing" dexec test -e /config/tools/bin/badsum
+assert_fail "an unreachable URL installs nothing" dexec test -e /config/tools/bin/missing
+assert_ok "no partial download is left behind" \
+    dexec sh -c '! ls /config/tools/bin/.bin-tool.* >/dev/null 2>&1'
+BIN_LOGS="$("${COMPOSE[@]}" logs paseo 2>&1)"
+assert_contains "a wrong checksum is reported" "$BIN_LOGS" "badsum: checksum mismatch"
+"${COMPOSE[@]}" restart paseo >/dev/null
+wait_for "container returns for the BIN_TOOLS ledger check" 240 boot_complete
+assert_contains "a second boot skips an installed binary" \
+    "$("${COMPOSE[@]}" logs paseo 2>&1 | tail -n 200)" "bin: hello=file:///config/fixtures/hello#sha256=${GOOD_SHA} already installed"
+"${COMPOSE[@]}" down >/dev/null
+"${COMPOSE[@]}" up -d
+wait_for "container returns to the default configuration" 240 boot_complete
+
 echo "== banner =="
 "${COMPOSE[@]}" down >/dev/null
 "${COMPOSE[@]}" up -d

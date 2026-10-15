@@ -184,3 +184,44 @@ chown_home() {
     find "$USER_HOME" -path "$WORKSPACE_DIR" -prune -o \
         -exec chown -h "$owner" {} +
 }
+
+# bin_tool_install SPEC
+#
+# Installs one single-binary tool into TOOL_PREFIX/bin. SPEC is name=url, with
+# an optional #sha256=<hex> suffix on the URL. kubectl and talosctl ship as
+# plain executables on neither npm nor PyPI, which is why this exists. The URL
+# names the version, so you pin it.
+#
+# The download lands in a temporary file beside its destination and is
+# renamed into place only after the checksum passes, so a failed or partial
+# download never leaves a broken command on PATH.
+bin_tool_install() {
+    local spec="$1" name url sha="" tmp
+    name="${spec%%=*}"
+    url="${spec#*=}"
+    if [ -z "$name" ] || [ "$name" = "$spec" ] || [ -z "$url" ]; then
+        warn "bin: '${spec}' is not name=url"
+        return 1
+    fi
+    case "$name" in
+        */*|.*) warn "bin: '${name}' is not a plain command name"; return 1 ;;
+    esac
+    case "$url" in
+        *'#sha256='*) sha="${url##*#sha256=}"; url="${url%#sha256=*}" ;;
+    esac
+
+    tmp="$(mktemp "${TOOL_PREFIX}/bin/.bin-tool.XXXXXX")"
+    if ! curl -fsSL --retry 3 -o "$tmp" "$url"; then
+        rm -f "$tmp"
+        warn "bin: ${name}: download failed from ${url}"
+        return 1
+    fi
+    if [ -n "$sha" ] && ! printf '%s  %s\n' "$sha" "$tmp" | sha256sum -c - >/dev/null 2>&1; then
+        rm -f "$tmp"
+        warn "bin: ${name}: checksum mismatch"
+        return 1
+    fi
+    chmod 0755 "$tmp"
+    chown "${PUID:-99}:${PGID:-100}" "$tmp"
+    mv -f "$tmp" "${TOOL_PREFIX}/bin/${name}"
+}

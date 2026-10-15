@@ -29,8 +29,14 @@ split_specs() {
     printf '%s\n' "$1" | tr ',' ' ' | tr -s '[:space:]' '\n' | sed '/^$/d'
 }
 
+# split_words LIST: one entry per line, split on whitespace only. BIN_TOOLS
+# entries are URLs, which may contain commas.
+split_words() {
+    printf '%s\n' "$1" | tr -s '[:space:]' '\n' | sed '/^$/d'
+}
+
 install_tools() {
-    local kind="$1" installer="$2" list="$3" spec
+    local kind="$1" installer="$2" list="$3" splitter="${4:-split_specs}" spec
     [ -n "$list" ] || return 0
 
     while IFS= read -r spec; do
@@ -52,11 +58,12 @@ install_tools() {
         else
             warn "${kind}: ${spec} install failed; continuing without it"
         fi
-    done < <(split_specs "$list")
+    done < <("$splitter" "$list")
 }
 
 install_tools npm npm_tool_install "${NPM_TOOLS:-}"
 install_tools python uv_tool_install "${PYTHON_TOOLS:-}"
+install_tools bin bin_tool_install "${BIN_TOOLS:-}" split_words
 
 # Both installers run as the paseo user, so everything they write is already
 # owned correctly. Only what this script creates as root needs claiming, and
