@@ -111,6 +111,7 @@ dexec rm -rf /home/paseo/workspace/.owner-probe
 
 echo "== HOME_PERSIST =="
 for rel in .config .kube .talos; do
+    # shellcheck disable=SC2088 # the tilde is label text, not a path.
     assert_eq "~/${rel} links to /config/home" "/config/home/${rel}" \
         "$(dexec readlink "/home/paseo/${rel}" | tr -d '\r')"
 done
@@ -122,6 +123,29 @@ assert_eq "a kubeconfig survives a recreate" "apiVersion: v1" \
     "$(dexec cat /home/paseo/.kube/config | tr -d '\r')"
 assert_eq "persisted config is owned by paseo" "paseo" \
     "$(dexec stat -c '%U' /config/home/.kube/config | tr -d '\r')"
+
+echo "== HOME_PERSIST rejects unsafe entries =="
+# Each entry below must be refused with a warning and must never abort the
+# boot. The first one names the share's own mount point, which link_persist
+# would otherwise delete or fail to replace.
+"${COMPOSE[@]}" down >/dev/null
+mkdir -p "$TMP_DIR/config/home/workspace"
+touch "$TMP_DIR/workspace/.persist-canary"
+HOME_PERSIST="workspace/ ./ /etc/ ../x/ foo/../bar/ .kube/" "${COMPOSE[@]}" up -d
+wait_for "container boots with unsafe HOME_PERSIST entries" 240 boot_complete
+assert_ok "the share's canary file survives" \
+    dexec test -e /home/paseo/workspace/.persist-canary
+assert_ok "the share is still a directory" dexec test -d /home/paseo/workspace
+assert_fail "the share is not a symlink" dexec test -L /home/paseo/workspace
+# shellcheck disable=SC2088 # the tilde is label text, not a path.
+assert_eq "~/.kube still links to /config/home" "/config/home/.kube" \
+    "$(dexec readlink /home/paseo/.kube | tr -d '\r')"
+assert_contains "the share entry is reported" \
+    "$("${COMPOSE[@]}" logs paseo 2>&1)" "HOME_PERSIST: ignoring 'workspace/'"
+"${COMPOSE[@]}" down >/dev/null
+"${COMPOSE[@]}" up -d
+wait_for "container returns to the default HOME_PERSIST" 240 boot_complete
+rm -rf "$TMP_DIR/config/home/workspace" "$TMP_DIR/workspace/.persist-canary"
 
 echo "== outbound git credential =="
 # compose.yaml sets an obviously fake GIT_TOKEN. What matters is where the

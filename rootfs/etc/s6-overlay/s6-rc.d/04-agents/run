@@ -85,15 +85,44 @@ install_agent() {
 # The home directory is not persisted, so without a link each of those is
 # lost on every recreate. These links run before any agent installs, for the
 # same reason the agents' own persist paths do.
+#
+# You write each entry relative to home. A trailing "/" marks a directory,
+# and an entry without one marks a file. The loop normalizes every entry
+# first, then refuses any it cannot link safely: an empty entry, ".", an
+# absolute path, a path with a ".." segment, and the share's mount point or
+# anything above or below it. Linking the share would delete your
+# repositories or abort the boot, so the loop warns and moves on instead.
 HOME_PERSIST="${HOME_PERSIST-.config/ .kube/ .talos/}"
-while IFS= read -r rel; do
-    case "$rel" in
-        /*|*..*) warn "HOME_PERSIST: ignoring '${rel}': must be relative to home"; continue ;;
+share_rel="${WORKSPACE_DIR#"${USER_HOME}"/}"
+while IFS= read -r entry; do
+    case "$entry" in
+        /*) warn "HOME_PERSIST: ignoring '${entry}': must be relative to home"; continue ;;
     esac
-    link_persist "${CONFIG_DIR}/home/${rel}" "${USER_HOME}/${rel}"
-    chown -h "${PUID:-99}:${PGID:-100}" "${USER_HOME}/${rel%/}"
-    if [ -e "${CONFIG_DIR}/home/${rel%/}" ]; then
-        chown -h "${PUID:-99}:${PGID:-100}" "${CONFIG_DIR}/home/${rel%/}"
+    rel="$(printf '%s' "$entry" | tr -s '/')"
+    while [ "${rel#./}" != "$rel" ]; do rel="${rel#./}"; done
+    while [ "${rel%/.}" != "$rel" ]; do rel="${rel%/.}"; done
+    while [ "${rel//\/.\//\/}" != "$rel" ]; do rel="${rel//\/.\//\/}"; done
+    slash=""
+    case "$rel" in
+        */) slash="/" ;;
+    esac
+    rel="${rel%/}"
+    case "$rel" in
+        ""|.) warn "HOME_PERSIST: ignoring '${entry}': names the home directory itself"; continue ;;
+    esac
+    case "/${rel}/" in
+        */../*) warn "HOME_PERSIST: ignoring '${entry}': must not contain '..'"; continue ;;
+    esac
+    case "${rel}/" in
+        "${share_rel}"/*) warn "HOME_PERSIST: ignoring '${entry}': is or is inside the share"; continue ;;
+    esac
+    case "${share_rel}/" in
+        "${rel}"/*) warn "HOME_PERSIST: ignoring '${entry}': contains the share"; continue ;;
+    esac
+    link_persist "${CONFIG_DIR}/home/${rel}${slash}" "${USER_HOME}/${rel}"
+    chown -h "${PUID:-99}:${PGID:-100}" "${USER_HOME}/${rel}"
+    if [ -e "${CONFIG_DIR}/home/${rel}" ]; then
+        chown -h "${PUID:-99}:${PGID:-100}" "${CONFIG_DIR}/home/${rel}"
     fi
 done < <(printf '%s\n' "$HOME_PERSIST" | tr -s '[:space:]' '\n' | sed '/^$/d')
 
