@@ -52,8 +52,8 @@
           Type="Variable" Display="always" Required="false" Mask="false"></Config>
 
   <Config Name="SSH_PUBKEY" Target="SSH_PUBKEY" Default="" Mode=""
-          Description="Your SSH public key. Password authentication is disabled."
-          Type="Variable" Display="always" Required="true" Mask="false"></Config>
+          Description="Your SSH public key. SSH logins need a key, because password authentication is disabled. You can leave it empty when SSHD_ENABLED is 0 or /config/ssh/authorized_keys already holds your key."
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
 
   <Config Name="AGENTS" Target="AGENTS" Default="claude,codex" Mode=""
           Description="Comma-separated coding agents to install on boot. Supported: claude, codex."
