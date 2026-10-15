@@ -77,9 +77,10 @@ assert_eq "config is owned by paseo" "paseo" "$(dexec stat -c '%U' /config | tr 
 # transfer, archive, network probe, data, and the Python installer that
 # PYTHON_TOOLS and uvx-based MCP servers both go through. fd is checked by
 # name rather than as fdfind, since the symlink is the point.
-for cmd in rsync wget unzip zip tmux tree patch sqlite3 fd dig nc uv uvx; do
+for cmd in rsync wget unzip zip tmux tree patch sqlite3 fd dig nc uv uvx gh; do
     assert_ok "${cmd} is in the image" dexec sh -c "command -v ${cmd} >/dev/null"
 done
+assert_ok "gh runs as paseo" dexec_user gh --version
 # The hostname is what every shell prompt and terminal title in the container
 # shows, and only the creating command can set it -- a container cannot change
 # its own. This asserts the harness matches what the README and the unRAID

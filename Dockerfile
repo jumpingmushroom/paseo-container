@@ -16,6 +16,9 @@ ARG NODE_SHA256_ARM64=5f4ddab610c1ab2016b3c227cebdbf6d9495161487e4739c7b90090595
 ARG UV_VERSION=0.12.10
 ARG UV_SHA256_AMD64=173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b
 ARG UV_SHA256_ARM64=9ff6b9d4665edcdd3a88dcc73cd1eb641754deb927f14e8c62ebfde6bf4f5f5e
+ARG GH_VERSION=2.102.0
+ARG GH_SHA256_AMD64=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
+ARG GH_SHA256_ARM64=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484
 
 ENV DEBIAN_FRONTEND=noninteractive \
     S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
@@ -158,6 +161,24 @@ RUN set -eux; \
     rm -f /tmp/uv.tar.gz; \
     uv --version; \
     uvx --version
+
+# gh, the GitHub CLI. Agents reach for it for pull requests, issues, and CI
+# logs. Debian's package lags upstream, so the release tarball is used, pinned
+# by version and digest like Node and uv.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) gharch="amd64"; ghsha="${GH_SHA256_AMD64}" ;; \
+      arm64) gharch="arm64"; ghsha="${GH_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 3 \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gharch}.tar.gz" \
+      -o /tmp/gh.tar.gz; \
+    echo "${ghsha}  /tmp/gh.tar.gz" | sha256sum -c -; \
+    tar -C /usr/local --strip-components=1 --no-same-owner -xzf /tmp/gh.tar.gz \
+      "gh_${GH_VERSION}_linux_${gharch}/bin/gh"; \
+    rm -f /tmp/gh.tar.gz; \
+    gh --version
 
 RUN set -eux; \
     groupadd -g 100 paseo 2>/dev/null || groupadd paseo; \
