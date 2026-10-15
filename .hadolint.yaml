@@ -1,0 +1,6 @@
+ignored:
+  # Debian package versions are not pinned; the base image tag is the pin.
+  - DL3008
+  # Multiple consecutive RUN instructions are intentional for layer caching.
+  - DL3059
+failure-threshold: warning

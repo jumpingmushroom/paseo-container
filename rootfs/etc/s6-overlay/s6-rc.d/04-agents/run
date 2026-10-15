@@ -1,0 +1,96 @@
+#!/command/with-contenv bash
+set -euo pipefail
+LOG_TAG="04-agents"
+# shellcheck source=rootfs/usr/local/lib/paseo-container/common.sh
+source /usr/local/lib/paseo-container/common.sh
+
+export HOME="$USER_HOME"
+export PATH="${AGENT_PREFIX}/bin:/usr/local/bin:/usr/bin:/bin"
+
+if [ -n "${APT_PACKAGES:-}" ]; then
+    log "installing APT_PACKAGES: ${APT_PACKAGES}"
+    # shellcheck disable=SC2086 # APT_PACKAGES holds a space-separated package
+    # list that must word-split into individual apt-get arguments.
+    if apt-get update -qq \
+        && apt-get install -y --no-install-recommends ${APT_PACKAGES}; then
+        rm -rf /var/lib/apt/lists/*
+    else
+        # A bad package name must not stop the container from booting.
+        warn "APT_PACKAGES install failed; continuing"
+    fi
+fi
+
+install_agent() {
+    local name="$1"
+    local installer="${AGENT_LIB_DIR}/${name}.sh"
+
+    if [ ! -f "$installer" ]; then
+        warn "unknown agent '${name}': no installer at ${installer}; skipping"
+        local known="" f
+        for f in "${AGENT_LIB_DIR}"/*.sh; do
+            [ -e "$f" ] || continue
+            known="${known}$(basename "$f" .sh) "
+        done
+        warn "known agents: ${known}"
+        return 0
+    fi
+
+    # Each installer runs in a subshell so its function definitions cannot
+    # leak into the next one.
+    (
+        # shellcheck source=/dev/null
+        source "$installer"
+
+        # Credential links must exist before the installer runs, so an
+        # installer that writes settings during setup writes into /config.
+        # This script runs as root, so anything link_persist creates is
+        # root-owned; the agent itself runs as paseo, so each path is claimed
+        # here rather than waiting for the recursive chown at the end of this
+        # script, which lands after the installer has already run.
+        while IFS= read -r rel; do
+            [ -n "$rel" ] || continue
+            link_persist "${AGENT_PREFIX}/state/${rel}" "${USER_HOME}/${rel}"
+            chown -h "${PUID:-99}:${PGID:-100}" "${USER_HOME}/${rel%/}"
+            # A file persist path has no /config side yet: link_persist
+            # leaves it for the agent's own first write to create.
+            if [ -e "${AGENT_PREFIX}/state/${rel%/}" ]; then
+                chown -h "${PUID:-99}:${PGID:-100}" \
+                    "${AGENT_PREFIX}/state/${rel%/}"
+            fi
+        done < <(agent_persist_paths)
+
+        if [ "${AGENT_UPDATE:-0}" != "1" ] && agent_installed; then
+            log "${name}: already installed ($(agent_version || echo 'version unknown'))"
+        else
+            if agent_installed; then
+                log "${name}: reinstalling because AGENT_UPDATE=1"
+            else
+                log "${name}: installing"
+            fi
+
+            if agent_install; then
+                log "${name}: installed ($(agent_version || echo 'version unknown'))"
+            else
+                # A failed agent install must not stop Paseo and sshd from
+                # starting.
+                warn "${name}: install failed; continuing without it"
+            fi
+        fi
+    )
+}
+
+AGENTS="${AGENTS-claude}"
+if [ -z "$AGENTS" ]; then
+    log "AGENTS is empty; installing no agents"
+else
+    IFS=',' read -r -a agent_list <<< "$AGENTS"
+    for raw in "${agent_list[@]}"; do
+        name="$(printf '%s' "$raw" | tr -d '[:space:]')"
+        [ -n "$name" ] || continue
+        install_agent "$name" || warn "${name}: installer aborted; continuing"
+    done
+fi
+
+chown -R "${PUID:-99}:${PGID:-100}" "$AGENT_PREFIX"
+chown_home "${PUID:-99}:${PGID:-100}"
+log "ready"

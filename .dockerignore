@@ -1,0 +1,9 @@
+.git
+.github
+docs
+tests
+unraid
+compose.yaml
+README.md
+*.md
+!LICENSE

@@ -1,0 +1,157 @@
+#!/command/with-contenv bash
+set -euo pipefail
+LOG_TAG="03-ssh-keys"
+# shellcheck source=rootfs/usr/local/lib/paseo-container/common.sh
+source /usr/local/lib/paseo-container/common.sh
+
+HOSTKEY_DIR="${CONFIG_DIR}/ssh/hostkeys"
+AUTHKEYS_SRC="${CONFIG_DIR}/ssh/authorized_keys"
+SSH_HOME="${USER_HOME}/.ssh"
+
+mkdir -p "$HOSTKEY_DIR" "$SSH_HOME" /run/sshd
+
+# A persisted host key can be corrupt (zero-length, truncated) after an
+# unclean shutdown or a full storage pool mid-write. S6_BEHAVIOUR_IF_STAGE2_FAILS=2
+# means a failure here stops the container on every restart, so a corrupt key
+# must be discarded and regenerated rather than left to wedge the boot.
+for key in ssh_host_ed25519_key ssh_host_rsa_key; do
+    if [ -e "${HOSTKEY_DIR}/${key}" ] \
+       && ! ssh-keygen -y -f "${HOSTKEY_DIR}/${key}" >/dev/null 2>&1; then
+        warn "regenerating unreadable host key ${key}"
+        rm -f "${HOSTKEY_DIR}/${key}" "${HOSTKEY_DIR}/${key}.pub"
+    fi
+done
+
+# A private key can also persist with its public half missing (an
+# interrupted first boot). Regenerate just the public half rather than
+# discarding a perfectly good private key.
+for key in ssh_host_ed25519_key ssh_host_rsa_key; do
+    if [ -f "${HOSTKEY_DIR}/${key}" ] && [ ! -e "${HOSTKEY_DIR}/${key}.pub" ]; then
+        warn "regenerating missing public half for ${key}"
+        ssh-keygen -y -f "${HOSTKEY_DIR}/${key}" > "${HOSTKEY_DIR}/${key}.pub"
+    fi
+done
+
+if [ ! -f "${HOSTKEY_DIR}/ssh_host_ed25519_key" ]; then
+    log "generating ed25519 host key"
+    ssh-keygen -t ed25519 -N '' -q -f "${HOSTKEY_DIR}/ssh_host_ed25519_key"
+fi
+
+if [ ! -f "${HOSTKEY_DIR}/ssh_host_rsa_key" ]; then
+    log "generating rsa host key"
+    ssh-keygen -t rsa -b 4096 -N '' -q -f "${HOSTKEY_DIR}/ssh_host_rsa_key"
+fi
+
+# sshd's StrictModes rejects keys on group- or world-writable paths, and unRAID
+# appdata shares are frequently mode 777. Copy into /etc/ssh with correct modes
+# rather than pointing HostKey at the share.
+for key in ssh_host_ed25519_key ssh_host_rsa_key; do
+    install -o root -g root -m 0600 "${HOSTKEY_DIR}/${key}" "/etc/ssh/${key}"
+    install -o root -g root -m 0644 "${HOSTKEY_DIR}/${key}.pub" "/etc/ssh/${key}.pub"
+done
+
+touch "$AUTHKEYS_SRC"
+
+# Merge SSH_PUBKEY into the persisted file without duplicating entries.
+if [ -n "${SSH_PUBKEY:-}" ]; then
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        case "$line" in
+            \#*) continue ;;
+        esac
+        if ! grep -qxF -- "$line" "$AUTHKEYS_SRC"; then
+            printf '%s\n' "$line" >> "$AUTHKEYS_SRC"
+            log "added a key from SSH_PUBKEY"
+        fi
+    done <<< "${SSH_PUBKEY}"
+fi
+
+install -o "${PUID:-99}" -g "${PGID:-100}" -m 0600 \
+    "$AUTHKEYS_SRC" "${SSH_HOME}/authorized_keys"
+chown "${PUID:-99}:${PGID:-100}" "$SSH_HOME"
+chmod 0700 "$SSH_HOME"
+
+if [ ! -s "${SSH_HOME}/authorized_keys" ]; then
+    warn "no authorized keys: set SSH_PUBKEY or write ${AUTHKEYS_SRC}"
+fi
+
+log "validating sshd configuration"
+/usr/sbin/sshd -t
+
+# An outbound SSH identity, so an agent can reach a build host, a NAS, or a
+# router from here. Everything above this line is inbound -- who may ssh *into*
+# the container. This is the other direction, and the container had no home for
+# it until now, exactly as it had none for an outbound git credential before
+# /config/git/credentials.
+#
+# The private half never leaves /config; the public half is what you install in
+# authorized_keys on each host you want to reach. Drop your own pair in as
+# id_ed25519 and id_ed25519.pub and it is used untouched, so a key issued by
+# whoever runs those hosts keeps working. Otherwise one is generated on the
+# first boot that finds none, which means there is always a key to publish and
+# never a reason to copy your laptop's private key in here.
+CLIENT_KEY="${CONFIG_DIR}/ssh/id_ed25519"
+
+if [ ! -e "$CLIENT_KEY" ]; then
+    log "generating outbound ed25519 key"
+    # The comment is what identifies this key in a target's authorized_keys
+    # months from now, when it is one line among many.
+    ssh-keygen -t ed25519 -N '' -q -f "$CLIENT_KEY" \
+        -C "paseo-container@$(hostname)"
+fi
+
+# Unlike a host key, a corrupt or unreadable outbound key is never discarded
+# and regenerated here. Its public half may be authorized on a dozen hosts that
+# this container cannot reach to update, so throwing it away turns a bad boot
+# into an outage you have to fix by hand on every one of them. ssh-keygen also
+# fails this probe on a perfectly good passphrase-protected key, which has no
+# passphrase to offer at boot. Warn, and leave the key where it is.
+if ! ssh-keygen -y -f "$CLIENT_KEY" >/dev/null 2>&1; then
+    warn "outbound key ${CLIENT_KEY} is unreadable or passphrase-protected"
+elif [ ! -e "${CLIENT_KEY}.pub" ]; then
+    warn "regenerating missing public half for the outbound key"
+    ssh-keygen -y -f "$CLIENT_KEY" > "${CLIENT_KEY}.pub"
+fi
+
+# Copied rather than symlinked, for the client-side counterpart of the reason
+# the host keys are: ssh refuses an identity file that its group or anyone else
+# can read, and unRAID appdata shares are commonly mode 777. /config stays the
+# source of truth and ~/.ssh holds the copy ssh actually accepts.
+install -o "${PUID:-99}" -g "${PGID:-100}" -m 0600 \
+    "$CLIENT_KEY" "${SSH_HOME}/id_ed25519"
+if [ -e "${CLIENT_KEY}.pub" ]; then
+    install -o "${PUID:-99}" -g "${PGID:-100}" -m 0644 \
+        "${CLIENT_KEY}.pub" "${SSH_HOME}/id_ed25519.pub"
+fi
+chown "${PUID:-99}:${PGID:-100}" "$CLIENT_KEY"
+# Not an `[ -e ] && chown` one-liner: under `set -e` that ends the script on
+# every boot where the public half is missing, taking the container with it.
+if [ -e "${CLIENT_KEY}.pub" ]; then
+    chown "${PUID:-99}:${PGID:-100}" "${CLIENT_KEY}.pub"
+fi
+
+# ~/.ssh/config, for the hosts that need more than a hostname: a different
+# username, a non-standard port, a jump host. Optional -- ssh finds
+# ~/.ssh/id_ed25519 on its own without any of it. Copied for the same reason
+# the key is -- ssh refuses a config file its group or anyone else can write.
+# Removing the file from /config and restarting removes the copy too, so
+# /config remains the only place the setting lives.
+CLIENT_CONFIG="${CONFIG_DIR}/ssh/config"
+if [ -s "$CLIENT_CONFIG" ]; then
+    install -o "${PUID:-99}" -g "${PGID:-100}" -m 0600 \
+        "$CLIENT_CONFIG" "${SSH_HOME}/config"
+    chown "${PUID:-99}:${PGID:-100}" "$CLIENT_CONFIG"
+else
+    rm -f "${SSH_HOME}/config"
+fi
+
+# known_hosts is the one file here that ssh itself writes, every time it
+# accepts a host it has not seen. A copy would lose those additions on the next
+# boot and ask again; the symlink makes the answer outlive a container
+# recreate, which until now it did not.
+link_persist "${CONFIG_DIR}/ssh/known_hosts" "${SSH_HOME}/known_hosts"
+if [ -e "${CONFIG_DIR}/ssh/known_hosts" ]; then
+    chown "${PUID:-99}:${PGID:-100}" "${CONFIG_DIR}/ssh/known_hosts"
+fi
+
+log "ready"

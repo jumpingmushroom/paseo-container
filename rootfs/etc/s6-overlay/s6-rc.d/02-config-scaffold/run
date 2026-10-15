@@ -1,0 +1,85 @@
+#!/command/with-contenv bash
+set -euo pipefail
+LOG_TAG="02-config-scaffold"
+# shellcheck source=rootfs/usr/local/lib/paseo-container/common.sh
+source /usr/local/lib/paseo-container/common.sh
+
+log "creating /config tree"
+mkdir -p \
+    "${CONFIG_DIR}/ssh/hostkeys" \
+    "${AGENT_PREFIX}/bin" \
+    "${AGENT_PREFIX}/state" \
+    "${TOOL_PREFIX}/bin" \
+    "${CONFIG_DIR}/git"
+
+link_persist "${CONFIG_DIR}/git/gitconfig" "${USER_HOME}/.gitconfig"
+
+if [ ! -s "${CONFIG_DIR}/git/gitconfig" ]; then
+    : > "${CONFIG_DIR}/git/gitconfig"
+    if [ -n "${GIT_USER_NAME:-}" ]; then
+        git config --file "${CONFIG_DIR}/git/gitconfig" user.name "${GIT_USER_NAME}"
+        log "seeded git user.name"
+    fi
+    if [ -n "${GIT_USER_EMAIL:-}" ]; then
+        git config --file "${CONFIG_DIR}/git/gitconfig" user.email "${GIT_USER_EMAIL}"
+        log "seeded git user.email"
+    fi
+fi
+
+# An outbound git credential, so an agent can push the work it just did. The
+# container has a home for inbound SSH -- authorized_keys -- and had none for
+# this until now.
+#
+# The token lives in its own 0600 file rather than in gitconfig, because
+# gitconfig is a file people paste into issues. GIT_TOKEN seeds it on the
+# first boot that finds no file, exactly as GIT_USER_NAME seeds an identity;
+# write the file yourself and you never have to put the token in an
+# environment variable at all.
+GIT_TOKEN_HOST="${GIT_TOKEN_HOST:-github.com}"
+if [ ! -e "${GIT_CREDENTIALS}" ] && [ -n "${GIT_TOKEN:-}" ]; then
+    # The username half is ignored by GitHub for a personal access token, and
+    # x-access-token is the name its own documentation uses.
+    (
+        umask 077
+        printf 'https://x-access-token:%s@%s\n' \
+            "${GIT_TOKEN}" "${GIT_TOKEN_HOST}" > "${GIT_CREDENTIALS}"
+    )
+    log "seeded a git credential for ${GIT_TOKEN_HOST}"
+fi
+
+if [ -s "${GIT_CREDENTIALS}" ]; then
+    # A credential file is only as private as its mode, and a /config restored
+    # from a backup can arrive world-readable.
+    chmod 0600 "${GIT_CREDENTIALS}"
+
+    git config --file "${CONFIG_DIR}/git/gitconfig" \
+        credential.helper "store --file ${GIT_CREDENTIALS}"
+
+    # The token authenticates over HTTPS, and a repository cloned with an SSH
+    # remote would never reach it. Rewriting the URL here, in the container's
+    # own gitconfig, leaves the repository's remote and everyone else's clone
+    # of it untouched.
+    git config --file "${CONFIG_DIR}/git/gitconfig" \
+        "url.https://${GIT_TOKEN_HOST}/.insteadOf" "git@${GIT_TOKEN_HOST}:"
+fi
+
+# 01-user-setup already chowned the whole tree recursively earlier this boot,
+# so only the paths this script creates afterward need claiming here. A
+# second recursive chown over all of /config would re-walk agents/state,
+# which grows unbounded over months on a FUSE share, for no benefit.
+chown "${PUID:-99}:${PGID:-100}" \
+    "${CONFIG_DIR}/ssh" \
+    "${CONFIG_DIR}/ssh/hostkeys" \
+    "${AGENT_PREFIX}" \
+    "${AGENT_PREFIX}/bin" \
+    "${AGENT_PREFIX}/state" \
+    "${TOOL_PREFIX}" \
+    "${TOOL_PREFIX}/bin" \
+    "${CONFIG_DIR}/git" \
+    "${CONFIG_DIR}/git/gitconfig"
+# An `[ -e ] && chown` one-liner here would end the script under `set -e` on
+# every boot with no credential file, taking the whole container with it.
+if [ -e "${GIT_CREDENTIALS}" ]; then
+    chown "${PUID:-99}:${PGID:-100}" "${GIT_CREDENTIALS}"
+fi
+log "ready"

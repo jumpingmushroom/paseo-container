@@ -1,0 +1,14 @@
+# runtime state, never commit
+/config/
+*.env
+.env
+*.pem
+*.key
+id_*
+!id_*.pub.example
+
+# test artifacts
+tests/.tmp/
+
+# local claude tooling state, including worktrees created inside the repo
+.claude/

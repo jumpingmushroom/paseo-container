@@ -1,0 +1,55 @@
+#!/command/with-contenv bash
+set -euo pipefail
+LOG_TAG="01-user-setup"
+# shellcheck source=rootfs/usr/local/lib/paseo-container/common.sh
+source /usr/local/lib/paseo-container/common.sh
+rm -f /run/paseo-container-ready
+
+PUID="${PUID:-99}"
+PGID="${PGID:-100}"
+UMASK="${UMASK:-022}"
+TZ="${TZ:-UTC}"
+
+current_uid="$(id -u "$CONTAINER_USER")"
+current_gid="$(id -g "$CONTAINER_USER")"
+
+if [ "$current_gid" != "$PGID" ]; then
+    log "setting ${CONTAINER_GROUP} gid to ${PGID}"
+    groupmod -o -g "$PGID" "$CONTAINER_GROUP"
+fi
+
+if [ "$current_uid" != "$PUID" ]; then
+    log "setting ${CONTAINER_USER} uid to ${PUID}"
+    usermod -o -u "$PUID" "$CONTAINER_USER"
+fi
+
+log "umask ${UMASK}"
+umask "$UMASK"
+
+# TZ alone is not enough: anything that reads /etc/localtime rather than the
+# TZ environment variable still sees UTC unless this file points at the
+# requested zone. A typo must not stop the container booting.
+if [ -e "/usr/share/zoneinfo/${TZ}" ]; then
+    log "timezone ${TZ}"
+    ln -sf "/usr/share/zoneinfo/${TZ}" /etc/localtime
+    echo "$TZ" > /etc/timezone
+else
+    warn "unknown timezone '${TZ}'; leaving /etc/localtime unchanged"
+fi
+
+mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR" "$USER_HOME"
+[ -L /workspace ] || ln -sfn "$WORKSPACE_DIR" /workspace
+
+# /config is small and always ours, so recurse. The home directory holds the
+# source share, so chown_home skips it.
+chown -R "$PUID:$PGID" "$CONFIG_DIR"
+chown_home "$PUID:$PGID"
+
+# The share can hold many large repositories. Recursing would make boot time
+# scale with the size of your source tree, so only the mount point is claimed.
+# Files inside keep whatever ownership they already had.
+chown "$PUID:$PGID" "$WORKSPACE_DIR" || warn "could not claim ${WORKSPACE_DIR}"
+
+echo "$UMASK" > /run/paseo-container-umask
+
+log "ready: uid=$(id -u "$CONTAINER_USER") gid=$(id -g "$CONTAINER_USER")"

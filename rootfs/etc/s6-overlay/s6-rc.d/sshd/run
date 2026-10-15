@@ -1,0 +1,16 @@
+#!/command/with-contenv bash
+set -euo pipefail
+LOG_TAG="sshd"
+# shellcheck source=rootfs/usr/local/lib/paseo-container/common.sh
+source /usr/local/lib/paseo-container/common.sh
+
+if [ "${SSHD_ENABLED:-1}" != "1" ]; then
+    log "disabled via SSHD_ENABLED=${SSHD_ENABLED}"
+    # Tell s6 not to restart this service, then exit cleanly.
+    /command/s6-svc -O /run/service/sshd
+    exit 0
+fi
+
+mkdir -p /run/sshd
+log "starting sshd on port 22"
+exec /usr/sbin/sshd -D -e

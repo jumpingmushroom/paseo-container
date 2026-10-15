@@ -1,0 +1,42 @@
+# This is the local test harness used by tests/smoke.sh and CI, not a
+# deployment example: it binds host ports for local testing and has no
+# restart policy. To deploy this image for real, follow the example in the
+# README instead.
+services:
+  paseo:
+    build:
+      context: .
+    image: paseo-container:test
+    container_name: paseo-container-test
+    # Without this, the container's hostname is its own container ID, which is
+    # what every shell prompt and terminal title inside it then shows. Docker
+    # sets the hostname at creation and the container cannot change it later,
+    # so it belongs here and in the README examples alike.
+    hostname: paseo
+    ports:
+      - "2223:22"
+    stop_grace_period: 30s
+    environment:
+      PUID: "${PUID:-99}"
+      PGID: "${PGID:-100}"
+      TZ: "${TZ:-UTC}"
+      SSH_PUBKEY: "${SSH_PUBKEY:-}"
+      AGENTS: "${AGENTS-claude,codex}"
+      AGENT_UPDATE: "${AGENT_UPDATE:-0}"
+      SSHD_ENABLED: "${SSHD_ENABLED:-1}"
+      GIT_USER_NAME: "${GIT_USER_NAME:-}"
+      GIT_USER_EMAIL: "${GIT_USER_EMAIL:-}"
+      APT_PACKAGES: "${APT_PACKAGES:-}"
+      # Two small, quick packages, one from each ecosystem: the suite asserts
+      # both land on PATH, so the defaults here are what exercises the
+      # /config/tools install path at all.
+      NPM_TOOLS: "${NPM_TOOLS-json}"
+      PYTHON_TOOLS: "${PYTHON_TOOLS-yq}"
+      TOOL_UPDATE: "${TOOL_UPDATE:-0}"
+      # Obviously fake, and it never leaves tests/.tmp: the suite asserts how
+      # the credential is stored, not that it authenticates anywhere.
+      GIT_TOKEN: "${GIT_TOKEN-smoke-not-a-real-token}"
+      GIT_TOKEN_HOST: "${GIT_TOKEN_HOST:-github.com}"
+    volumes:
+      - ./tests/.tmp/config:/config
+      - ./tests/.tmp/workspace:/home/paseo/workspace

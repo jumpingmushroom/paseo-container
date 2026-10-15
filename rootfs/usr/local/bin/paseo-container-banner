@@ -1,0 +1,36 @@
+#!/command/with-contenv bash
+set -euo pipefail
+# shellcheck source=rootfs/usr/local/lib/paseo-container/common.sh
+source /usr/local/lib/paseo-container/common.sh
+
+list_bin() {
+    local dir="$1" names="" entry
+    if [ -d "$dir" ]; then
+        for entry in "$dir"/*; do
+            [ -e "$entry" ] || continue
+            names="${names}$(basename "$entry") "
+        done
+    fi
+    printf '%s' "${names:-none}"
+}
+
+outbound_key="$(ssh-keygen -lf "${CONFIG_DIR}/ssh/id_ed25519.pub" 2>/dev/null \
+    | awk '{print $2}' || true)"
+if [ -n "$outbound_key" ]; then
+    outbound_key="${outbound_key} in ${CONFIG_DIR}/ssh/id_ed25519.pub"
+else
+    outbound_key="none"
+fi
+
+cat <<BANNER
+
+  paseo-container
+
+  agents        $(list_bin "${AGENT_PREFIX}/bin")
+  tools         $(list_bin "${TOOL_PREFIX}/bin")
+  ssh in        container port 22, key-only, user '${CONTAINER_USER}'
+  ssh out       ${outbound_key}
+  workspace     ${WORKSPACE_DIR}
+  config        ${CONFIG_DIR}
+
+BANNER

@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          mapfile -t files < <(
+            find rootfs tests -type f \
+              \( -name '*.sh' -o -name run -o -name up \
+                 -o -name paseo-container-banner \) -print
+          )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no shell scripts yet"
+            exit 0
+          fi
+          printf '%s\n' "${files[@]}"
+          shellcheck --shell=bash --external-sources "${files[@]}"
+
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          config: .hadolint.yaml
+        continue-on-error: false
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Run the smoke suite
+        run: ./tests/smoke.sh
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose -f compose.yaml logs || true

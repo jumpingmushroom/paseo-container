@@ -1,0 +1,81 @@
+#!/command/with-contenv bash
+set -euo pipefail
+LOG_TAG="05-tools"
+# shellcheck source=rootfs/usr/local/lib/paseo-container/common.sh
+source /usr/local/lib/paseo-container/common.sh
+
+export HOME="$USER_HOME"
+export PATH="${TOOL_PREFIX}/bin:${AGENT_PREFIX}/bin:/usr/local/bin:/usr/bin:/bin"
+
+# One line per installed spec, so a later boot can skip work it already did.
+# `npm install` re-fetches and rewrites a package it already has rather than
+# noticing it is there, so without this a container with a handful of tools
+# would spend minutes reinstalling them on every single restart.
+LEDGER="${TOOL_PREFIX}/.installed"
+
+mkdir -p "${TOOL_PREFIX}/bin"
+touch "$LEDGER"
+
+# split_specs LIST
+#
+# Prints one spec per line. Both variables read as a list of package names, and
+# people write those separated by spaces or by commas depending on which other
+# variable they copied, so accept either.
+#
+# The trailing newline is load-bearing: `read` returns non-zero on a final line
+# that has none, so a `while read` loop silently drops it -- and with a
+# one-package list, that is every package.
+split_specs() {
+    printf '%s\n' "$1" | tr ',' ' ' | tr -s '[:space:]' '\n' | sed '/^$/d'
+}
+
+install_tools() {
+    local kind="$1" installer="$2" list="$3" spec
+    [ -n "$list" ] || return 0
+
+    while IFS= read -r spec; do
+        [ -n "$spec" ] || continue
+
+        if [ "${TOOL_UPDATE:-0}" != "1" ] \
+            && grep -qxF "${kind} ${spec}" "$LEDGER"; then
+            log "${kind}: ${spec} already installed"
+            continue
+        fi
+
+        log "${kind}: installing ${spec}"
+        # A tool that will not install must not stop the container booting,
+        # exactly as a failed agent install does not.
+        if "$installer" "$spec"; then
+            grep -qxF "${kind} ${spec}" "$LEDGER" \
+                || printf '%s %s\n' "$kind" "$spec" >> "$LEDGER"
+            log "${kind}: installed ${spec}"
+        else
+            warn "${kind}: ${spec} install failed; continuing without it"
+        fi
+    done < <(split_specs "$list")
+}
+
+install_tools npm npm_tool_install "${NPM_TOOLS:-}"
+install_tools python uv_tool_install "${PYTHON_TOOLS:-}"
+
+# Both installers run as the paseo user, so everything they write is already
+# owned correctly. Only what this script creates as root needs claiming, and
+# claiming just that avoids re-walking a uv cache that grows with every tool
+# on a share where a recursive chown is expensive.
+# A failure here must not fail the oneshot: the container depends on it, so an
+# unhappy chown on a FUSE share would cost you the whole container rather than
+# the ownership of one file.
+chown "${PUID:-99}:${PGID:-100}" "$TOOL_PREFIX" "${TOOL_PREFIX}/bin" "$LEDGER" \
+    || warn "could not claim ${TOOL_PREFIX}"
+log "ready"
+
+# The banner reports what is installed, so it prints here rather than at the
+# end of 04-agents: this is the last oneshot before sshd starts, and by now
+# both the agents and the tools are on disk. #!/command/with-contenv needs
+# /command back on the PATH this script narrowed above.
+PATH="/command:$PATH" /usr/local/bin/paseo-container-banner || warn "banner failed"
+
+# Field 22 of /proc/1/stat is the start time of PID 1. The marker holds it so
+# that a wait right after `docker restart` cannot mistake the previous boot's
+# marker for this one: /run survives a restart, but PID 1 starts over.
+cut -d' ' -f22 /proc/1/stat > /run/paseo-container-ready
