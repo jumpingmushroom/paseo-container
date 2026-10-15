@@ -1,0 +1,19 @@
+#!/command/with-contenv bash
+set -euo pipefail
+LOG_TAG="06-paseo-prep"
+# shellcheck source=rootfs/usr/local/lib/paseo-container/common.sh
+source /usr/local/lib/paseo-container/common.sh
+
+mkdir -p "$PASEO_DIR"
+chown "${PUID:-99}:${PGID:-100}" "$PASEO_DIR"
+
+# Paseo's supervisor treats paseo.pid as live when the host boot ID matches
+# and the recorded PID exists. A container restart keeps the host's boot ID,
+# and a new container reuses small PIDs, so a lock left by an unclean stop can
+# look live. The daemon then exits as "already running" and s6 restarts it in
+# a loop. No daemon runs before this oneshot, so any lock here is stale.
+if [ -e "${PASEO_DIR}/paseo.pid" ]; then
+    log "removing a stale ${PASEO_DIR}/paseo.pid"
+    rm -f "${PASEO_DIR}/paseo.pid"
+fi
+log "ready"

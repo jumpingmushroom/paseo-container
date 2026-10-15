@@ -16,8 +16,13 @@ AGENT_PREFIX="/config/agents"
 AGENT_LIB_DIR="/usr/local/lib/paseo-container/agents"
 TOOL_PREFIX="/config/tools"
 GIT_CREDENTIALS="/config/git/credentials"
+# Paseo's own state directory. Paseo reads it from PASEO_HOME, which is why
+# the container user's home directory is USER_HOME and never PASEO_HOME.
+PASEO_DIR="/config/paseo"
+PASEO_PASSWORD_FILE="/config/paseo/password"
 export CONTAINER_USER CONTAINER_GROUP USER_HOME CONFIG_DIR WORKSPACE_DIR
 export AGENT_PREFIX AGENT_LIB_DIR TOOL_PREFIX GIT_CREDENTIALS
+export PASEO_DIR PASEO_PASSWORD_FILE
 
 log() {
     printf '[%s] %s\n' "${LOG_TAG:-paseo-container}" "$1"

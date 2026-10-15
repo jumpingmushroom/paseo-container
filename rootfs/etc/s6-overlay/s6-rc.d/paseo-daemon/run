@@ -1,0 +1,48 @@
+#!/command/with-contenv bash
+set -euo pipefail
+LOG_TAG="paseo-daemon"
+# shellcheck source=rootfs/usr/local/lib/paseo-container/common.sh
+source /usr/local/lib/paseo-container/common.sh
+
+umask "$(cat /run/paseo-container-umask 2>/dev/null || echo 022)"
+
+entry="$(cat /etc/paseo-server-entry)"
+
+password="${PASEO_PASSWORD:-}"
+if [ -z "$password" ] && [ -s "$PASEO_PASSWORD_FILE" ]; then
+    password="$(cat "$PASEO_PASSWORD_FILE")"
+fi
+# Paseo admits every connection as owner when it has no password, and it
+# listens on every interface here. Refuse to start rather than run open.
+[ -n "$password" ] || die "no password: set PASEO_PASSWORD or restore ${PASEO_PASSWORD_FILE}"
+
+# s6 runs a service from a directory it deletes once boot finishes; start in
+# the share instead, so nothing inherits a deleted working directory.
+cd "$WORKSPACE_DIR" || warn "could not enter ${WORKSPACE_DIR}"
+
+if [ -z "${TERM:-}" ] || [ "$TERM" = "dumb" ]; then
+    TERM="xterm-256color"
+fi
+
+log "starting paseo on 0.0.0.0:6767"
+# The supervisor is exec'd directly rather than through `paseo daemon run`,
+# because that command deletes PASEO_DESKTOP_MANAGED, and that variable is
+# what makes the daemon refuse the app's self-update request. NODE_ENV is
+# removed because an inherited NODE_ENV=production breaks worktree setup
+# (getpaseo/paseo#4614). Everything else in the container environment, such
+# as an operator's ANTHROPIC_API_KEY or GH_TOKEN, passes through to agents.
+exec /command/s6-setuidgid "$CONTAINER_USER" \
+    env -u NODE_ENV \
+        HOME="$USER_HOME" \
+        PATH="${TOOL_PREFIX}/bin:${AGENT_PREFIX}/bin:/usr/local/bin:/usr/bin:/bin" \
+        PASEO_HOME="$PASEO_DIR" \
+        PASEO_LISTEN="0.0.0.0:6767" \
+        PASEO_PASSWORD="$password" \
+        PASEO_WEB_UI_ENABLED=true \
+        PASEO_DESKTOP_MANAGED=1 \
+        CLAUDE_CONFIG_DIR="${USER_HOME}/.claude" \
+        CODEX_HOME="${USER_HOME}/.codex" \
+        XDG_CONFIG_HOME="${USER_HOME}/.config" \
+        TERM="$TERM" \
+        SHELL=/bin/bash \
+    node "$entry"

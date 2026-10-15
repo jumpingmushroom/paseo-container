@@ -11,6 +11,8 @@ source tests/lib/assert.sh
 TMP_DIR="$REPO_ROOT/tests/.tmp"
 SSH_KEY="$TMP_DIR/id_ed25519"
 COMPOSE=(docker compose -f compose.yaml)
+# compose.yaml maps the container's 6767 to this host port.
+PASEO_URL="http://127.0.0.1:6768"
 
 cleanup() {
     "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -34,6 +36,13 @@ dexec_user() {
 # shellcheck disable=SC2016 # the $() must expand inside the container, not here.
 boot_complete() {
     dexec sh -c '[ -s /run/paseo-container-ready ] && [ "$(cat /run/paseo-container-ready)" = "$(cut -d" " -f22 /proc/1/stat)" ]'
+}
+
+# paseo_healthy: /api/health is the one Paseo route that needs no password.
+# The daemon depends on every oneshot, so an answer here also means the boot
+# finished.
+paseo_healthy() {
+    curl -fsS -o /dev/null --max-time 3 "${PASEO_URL}/api/health"
 }
 
 wait_for() {
@@ -88,6 +97,53 @@ assert_ok "gh runs as paseo" dexec_user gh --version
 # rather than a prompt that silently reverts to the container ID.
 assert_eq "hostname is set at creation" "paseo" "$(dexec hostname | tr -d '\r')"
 
+echo "== paseo daemon =="
+wait_for "paseo answers /api/health" 240 paseo_healthy
+assert_eq "/api/status without the password is 401" "401" \
+    "$(curl -s -o /dev/null -w '%{http_code}' "${PASEO_URL}/api/status")"
+assert_eq "/api/status with the password is 200" "200" \
+    "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer smoketest' \
+        "${PASEO_URL}/api/status")"
+# Paseo renames its processes, so they show as "Paseo Supervisor" and
+# "Paseo Daemon" rather than as node and its script path.
+# shellcheck disable=SC2016 # the $() must expand inside the container.
+assert_eq "paseo runs as paseo" "paseo" \
+    "$(dexec sh -c 'ps -o user= -p "$(pgrep -d, -f "^Paseo (Supervisor|Daemon)\$")" | sort -u' \
+        | tr -d '\r ')"
+assert_ok "paseo state lives in /config/paseo" dexec test -s /config/paseo/daemon-keypair.json
+DAEMON_PID="$(dexec sh -c 'pgrep -u paseo -f "^Paseo Supervisor\$" | head -n1' | tr -d '\r')"
+# Root in the container lacks CAP_SYS_PTRACE, so only the owner can read
+# another process's environment.
+DAEMON_ENV="$(dexec_user sh -c "tr '\0' '\n' < /proc/${DAEMON_PID}/environ")"
+assert_contains "self-update is refused" "$DAEMON_ENV" "PASEO_DESKTOP_MANAGED=1"
+assert_contains "PASEO_HOME points at /config" "$DAEMON_ENV" "PASEO_HOME=/config/paseo"
+# shellcheck disable=SC2016 # $1 expands in the inner sh, not here.
+assert_ok "NODE_ENV is not set for the daemon" \
+    sh -c '! printf "%s" "$1" | grep -q "^NODE_ENV="' _ "$DAEMON_ENV"
+assert_fail "the paseo user cannot overwrite Paseo" \
+    dexec_user test -w /usr/local/lib/node_modules/@getpaseo
+# shellcheck disable=SC2016 # $1 expands in the inner sh, not here.
+assert_ok "the daemon finds claude on PATH" \
+    sh -c 'printf "%s" "$1" | grep -q "^PATH=.*/config/agents/bin"' _ "$DAEMON_ENV"
+
+echo "== a clean stop lets paseo finish =="
+# A clean shutdown removes paseo.pid; its absence after stop is the evidence
+# that s6 and Docker gave the supervisor enough time.
+"${COMPOSE[@]}" stop -t 30 paseo >/dev/null
+assert_fail "paseo.pid is gone after a clean stop" test -e "$TMP_DIR/config/paseo/paseo.pid"
+"${COMPOSE[@]}" start paseo >/dev/null
+wait_for "paseo returns after a clean stop" 240 paseo_healthy
+
+echo "== a stale paseo.pid does not block the next boot =="
+"${COMPOSE[@]}" kill -s SIGKILL paseo >/dev/null
+# SIGKILL normally leaves the supervisor's lock behind. Plant one with this
+# host's boot ID if it did not, so the boot below always meets a stale lock.
+[ -e "$TMP_DIR/config/paseo/paseo.pid" ] \
+    || printf '{"pid":1,"bootId":"%s"}\n' "$(cat /proc/sys/kernel/random/boot_id)" \
+        > "$TMP_DIR/config/paseo/paseo.pid"
+"${COMPOSE[@]}" start paseo >/dev/null
+wait_for "paseo starts despite a stale paseo.pid" 240 paseo_healthy
+
 echo "== config scaffold =="
 for path in ssh agents/bin agents/state git; do
     assert_ok "/config/$path exists" dexec test -d "/config/$path"
@@ -103,7 +159,7 @@ dexec sh -c 'mkdir -p /home/paseo/workspace/.owner-probe \
     && touch /home/paseo/workspace/.owner-probe/file \
     && chown -R 4242:4242 /home/paseo/workspace/.owner-probe'
 "${COMPOSE[@]}" restart paseo >/dev/null
-wait_for "container returns for the ownership check" 240 boot_complete
+wait_for "container returns for the ownership check" 240 paseo_healthy
 assert_eq "a share file keeps a foreign owner across boots" "4242" \
     "$(dexec stat -c '%u' /home/paseo/workspace/.owner-probe/file | tr -d '\r')"
 assert_eq "/workspace is a symlink to the share" "/home/paseo/workspace" \
@@ -119,7 +175,7 @@ done
 dexec_user sh -c 'printf "apiVersion: v1\n" > /home/paseo/.kube/config'
 "${COMPOSE[@]}" down >/dev/null
 "${COMPOSE[@]}" up -d
-wait_for "container returns after a recreate" 240 boot_complete
+wait_for "container returns after a recreate" 240 paseo_healthy
 assert_eq "a kubeconfig survives a recreate" "apiVersion: v1" \
     "$(dexec cat /home/paseo/.kube/config | tr -d '\r')"
 assert_eq "persisted config is owned by paseo" "paseo" \
@@ -133,7 +189,7 @@ echo "== HOME_PERSIST rejects unsafe entries =="
 mkdir -p "$TMP_DIR/config/home/workspace"
 touch "$TMP_DIR/workspace/.persist-canary"
 HOME_PERSIST="workspace/ ./ /etc/ ../x/ foo/../bar/ .kube/" "${COMPOSE[@]}" up -d
-wait_for "container boots with unsafe HOME_PERSIST entries" 240 boot_complete
+wait_for "container boots with unsafe HOME_PERSIST entries" 240 paseo_healthy
 assert_ok "the share's canary file survives" \
     dexec test -e /home/paseo/workspace/.persist-canary
 assert_ok "the share is still a directory" dexec test -d /home/paseo/workspace
@@ -145,7 +201,7 @@ assert_contains "the share entry is reported" \
     "$("${COMPOSE[@]}" logs paseo 2>&1)" "HOME_PERSIST: ignoring 'workspace/'"
 "${COMPOSE[@]}" down >/dev/null
 "${COMPOSE[@]}" up -d
-wait_for "container returns to the default HOME_PERSIST" 240 boot_complete
+wait_for "container returns to the default HOME_PERSIST" 240 paseo_healthy
 rm -rf "$TMP_DIR/config/home/workspace" "$TMP_DIR/workspace/.persist-canary"
 
 echo "== outbound git credential =="
@@ -205,7 +261,7 @@ assert_fail "the agent user cannot write to npm's global prefix" \
 echo "== persistence across restart =="
 dexec sh -c 'echo persistence-canary > /config/canary.txt'
 "${COMPOSE[@]}" restart paseo >/dev/null
-wait_for "container returns after restart" 240 boot_complete
+wait_for "container returns after restart" 240 paseo_healthy
 assert_eq "canary survived restart" "persistence-canary" \
     "$(dexec cat /config/canary.txt | tr -d '\r')"
 
@@ -328,7 +384,7 @@ assert_contains "the banner lists the installed tools" \
 echo "== agents are not reinstalled on the second boot =="
 dexec sh -c 'echo canary > /config/agents/bin/.install-canary'
 "${COMPOSE[@]}" restart paseo >/dev/null
-wait_for "container returns after agent restart" 240 boot_complete
+wait_for "container returns after agent restart" 240 paseo_healthy
 wait_for "agents settle after restart" 240 dexec test -x /config/agents/bin/claude
 assert_contains "second boot skipped the install" \
     "$("${COMPOSE[@]}" logs paseo 2>&1 | tail -n 200)" \
@@ -337,7 +393,7 @@ assert_contains "second boot skipped the install" \
 echo "== an unknown agent name does not brick the boot =="
 "${COMPOSE[@]}" down >/dev/null
 AGENTS="claude,codex,definitely-not-an-agent" "${COMPOSE[@]}" up -d
-wait_for "container boots with an unknown agent" 240 boot_complete
+wait_for "container boots with an unknown agent" 240 paseo_healthy
 assert_contains "unknown agent logged a warning" \
     "$("${COMPOSE[@]}" logs paseo 2>&1)" "definitely-not-an-agent"
 assert_ok "codex is installed" dexec test -x /config/agents/bin/codex
@@ -391,7 +447,7 @@ assert_ok "the wrapper spares an arg0 dir a live codex holds" \
 echo "== AGENT_UPDATE=1 forces a reinstall =="
 "${COMPOSE[@]}" down >/dev/null
 AGENT_UPDATE=1 "${COMPOSE[@]}" up -d
-wait_for "container boots with AGENT_UPDATE=1" 240 boot_complete
+wait_for "container boots with AGENT_UPDATE=1" 240 paseo_healthy
 assert_contains "AGENT_UPDATE forced a reinstall" \
     "$("${COMPOSE[@]}" logs paseo 2>&1)" "claude: reinstalling because AGENT_UPDATE=1"
 
@@ -399,7 +455,7 @@ echo '== AGENTS="" installs no agents =='
 dexec sh -c 'find /config/agents/bin -mindepth 1 -delete'
 "${COMPOSE[@]}" down >/dev/null
 AGENTS="" "${COMPOSE[@]}" up -d
-wait_for "container boots with AGENTS empty" 240 boot_complete
+wait_for "container boots with AGENTS empty" 240 paseo_healthy
 # shellcheck disable=SC2016 # the $() must expand inside the container's
 # shell via dexec, not on the host where shellcheck reads this line.
 assert_ok "no agents installed when AGENTS is empty" \
@@ -413,7 +469,7 @@ BAD_SHA="0000000000000000000000000000000000000000000000000000000000000000"
 "${COMPOSE[@]}" down >/dev/null
 BIN_TOOLS="hello=file:///config/fixtures/hello#sha256=${GOOD_SHA} badsum=file:///config/fixtures/hello#sha256=${BAD_SHA} missing=file:///config/fixtures/does-not-exist emptysum=file:///config/fixtures/hello#sha256= shortsum=file:///config/fixtures/hello#sha256=abc" \
     "${COMPOSE[@]}" up -d
-wait_for "container boots with BIN_TOOLS" 240 boot_complete
+wait_for "container boots with BIN_TOOLS" 240 paseo_healthy
 assert_eq "a BIN_TOOLS binary runs" "hello-bin" \
     "$(dexec_user /config/tools/bin/hello 2>/dev/null | tr -d '\r')"
 assert_eq "a BIN_TOOLS binary is owned by paseo" "paseo" \
@@ -435,17 +491,17 @@ assert_contains "an empty checksum is reported" "$BIN_LOGS" "emptysum: invalid s
 assert_contains "a short checksum is reported" "$BIN_LOGS" "shortsum: invalid sha256"
 assert_contains "a wrong checksum is reported" "$BIN_LOGS" "badsum: checksum mismatch"
 "${COMPOSE[@]}" restart paseo >/dev/null
-wait_for "container returns for the BIN_TOOLS ledger check" 240 boot_complete
+wait_for "container returns for the BIN_TOOLS ledger check" 240 paseo_healthy
 assert_contains "a second boot skips an installed binary" \
     "$("${COMPOSE[@]}" logs paseo 2>&1 | tail -n 200)" "bin: hello=file:///config/fixtures/hello#sha256=${GOOD_SHA} already installed"
 "${COMPOSE[@]}" down >/dev/null
 "${COMPOSE[@]}" up -d
-wait_for "container returns to the default configuration" 240 boot_complete
+wait_for "container returns to the default configuration" 240 paseo_healthy
 
 echo "== banner =="
 "${COMPOSE[@]}" down >/dev/null
 "${COMPOSE[@]}" up -d
-wait_for "container boots for the banner check" 240 boot_complete
+wait_for "container boots for the banner check" 240 paseo_healthy
 BANNER="$("${COMPOSE[@]}" logs paseo 2>&1)"
 # "ssh" alone already appears in ordinary boot log lines (sshd's own startup
 # message, and log tags), so a bare substring check would pass even with no
@@ -465,18 +521,18 @@ assert_fail "sshd is not listening" \
 
 "${COMPOSE[@]}" down >/dev/null
 "${COMPOSE[@]}" up -d
-wait_for "container returns to the default configuration" 240 boot_complete
+wait_for "container returns to the default configuration" 240 paseo_healthy
 
 echo "== timezone =="
 "${COMPOSE[@]}" down >/dev/null
 TZ="Europe/Oslo" "${COMPOSE[@]}" up -d
-wait_for "container boots with TZ set" 240 boot_complete
+wait_for "container boots with TZ set" 240 paseo_healthy
 assert_eq "TZ is applied to /etc/localtime" "/usr/share/zoneinfo/Europe/Oslo" \
     "$(dexec readlink -f /etc/localtime | tr -d '\r')"
 
 "${COMPOSE[@]}" down >/dev/null
 "${COMPOSE[@]}" up -d
-wait_for "container returns to the default configuration" 240 boot_complete
+wait_for "container returns to the default configuration" 240 paseo_healthy
 
 echo "== image layer hygiene =="
 assert_ok "no ssh host keys are baked into the image" \

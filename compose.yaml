@@ -15,6 +15,9 @@ services:
     hostname: paseo
     ports:
       - "2223:22"
+      # Offset from 6767, as 2223 is from 22, so the suite never talks to a
+      # Paseo daemon already running on the host by mistake.
+      - "6768:6767"
     stop_grace_period: 30s
     environment:
       PUID: "${PUID:-99}"
@@ -39,6 +42,8 @@ services:
       GIT_TOKEN: "${GIT_TOKEN-smoke-not-a-real-token}"
       GIT_TOKEN_HOST: "${GIT_TOKEN_HOST:-github.com}"
       HOME_PERSIST: "${HOME_PERSIST-.config/ .kube/ .talos/}"
+      # The harness password. Like GIT_TOKEN, it never leaves tests/.tmp.
+      PASEO_PASSWORD: "${PASEO_PASSWORD-smoketest}"
     volumes:
       - ./tests/.tmp/config:/config
       - ./tests/.tmp/workspace:/home/paseo/workspace

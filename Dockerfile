@@ -19,11 +19,13 @@ ARG UV_SHA256_ARM64=9ff6b9d4665edcdd3a88dcc73cd1eb641754deb927f14e8c62ebfde6bf4f
 ARG GH_VERSION=2.102.0
 ARG GH_SHA256_AMD64=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
 ARG GH_SHA256_ARM64=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484
+ARG PASEO_VERSION=0.11.2
 
 ENV DEBIAN_FRONTEND=noninteractive \
     S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
     S6_KEEP_ENV=1 \
     S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
+    S6_SERVICES_GRACETIME=25000 \
     LANG=C.UTF-8
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -180,6 +182,23 @@ RUN set -eux; \
     rm -f /tmp/gh.tar.gz; \
     gh --version
 
+# Paseo, pinned. The CLI and the server are installed side by side, as
+# Paseo's own image does, so the supervisor entry point sits at a stable path
+# under npm's global root. Both land in root-owned /usr/local, where the paseo
+# user cannot write: the app's Update button runs `npm install -g` as that
+# user, and that install has to fail rather than replace the pinned version.
+# ONNXRUNTIME_NODE_INSTALL=skip stops an optional speech dependency from
+# downloading native libraries at build time.
+RUN set -eux; \
+    ONNXRUNTIME_NODE_INSTALL=skip npm install -g --no-fund --no-audit --loglevel=error \
+      "@getpaseo/cli@${PASEO_VERSION}" "@getpaseo/server@${PASEO_VERSION}"; \
+    npm cache clean --force; \
+    entry="$(npm root -g)/@getpaseo/server/dist/scripts/supervisor-entrypoint.js"; \
+    test -f "$entry"; \
+    node --check "$entry"; \
+    printf '%s\n' "$entry" > /etc/paseo-server-entry; \
+    test "$(paseo --version | tr -d 'v')" = "${PASEO_VERSION}"
+
 RUN set -eux; \
     groupadd -g 100 paseo 2>/dev/null || groupadd paseo; \
     useradd -m -d /home/paseo -s /bin/bash -g paseo paseo; \
@@ -194,6 +213,11 @@ RUN set -eux; \
     find /etc/s6-overlay/s6-rc.d -type f \( -name run -o -name up \) -exec chmod 0755 {} +; \
     chmod 0755 /usr/local/bin/paseo-container-banner
 
-EXPOSE 22
+EXPOSE 22 6767
+
+# The long start period covers the first boot, which installs agents and
+# tools before the daemon starts.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
+  CMD curl -fsS -o /dev/null http://127.0.0.1:6767/api/health || exit 1
 
 ENTRYPOINT ["/init"]
