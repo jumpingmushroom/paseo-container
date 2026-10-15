@@ -25,6 +25,22 @@ fi
 paseo_version="$(paseo --version 2>/dev/null | head -n1 || echo 'unknown')"
 paseo_version="${paseo_version:-unknown}"
 
+# agent_version NAME: prints the installed agent's version, "not installed"
+# when its executable is missing, or "unknown" when it does not answer. It
+# runs the agent as the container user, so a first run cannot leave root-owned
+# files in the agent's state directory, and it never fails: the banner must
+# not abort a boot under set -e.
+agent_version() {
+    local bin="${AGENT_PREFIX}/bin/$1" version=""
+    if [ ! -x "$bin" ]; then
+        printf 'not installed'
+        return 0
+    fi
+    version="$(/command/s6-setuidgid "$CONTAINER_USER" "$bin" --version 2>/dev/null \
+        | head -n1 || true)"
+    printf '%s' "${version:-unknown}"
+}
+
 relay="$(jq -r '.daemon.relay.enabled // false' "${PASEO_DIR}/config.json" 2>/dev/null || echo unknown)"
 case "$relay" in
     true) relay="on" ;;
@@ -42,6 +58,8 @@ cat <<BANNER
   paseo-container
 
   paseo         ${paseo_version}
+  claude        $(agent_version claude)
+  codex         $(agent_version codex)
   agents        $(list_bin "${AGENT_PREFIX}/bin")
   tools         $(list_bin "${TOOL_PREFIX}/bin")
   relay         ${relay}

@@ -77,8 +77,9 @@ chown "${PUID:-99}:${PGID:-100}" "$TOOL_PREFIX" "${TOOL_PREFIX}/bin" "$LEDGER" \
 log "ready"
 
 # The banner reports what is installed, so it prints here rather than at the
-# end of 04-agents: this is the last oneshot before sshd starts, and by now
-# both the agents and the tools are on disk. #!/command/with-contenv needs
+# end of 04-agents: by now both the agents and the tools are on disk. sshd
+# depends only on 03-ssh-keys, so it can already be running when the banner
+# prints. #!/command/with-contenv needs
 # /command back on the PATH this script narrowed above.
 PATH="/command:$PATH" /usr/local/bin/paseo-container-banner || warn "banner failed"
 
