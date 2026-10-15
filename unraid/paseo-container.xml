@@ -1,0 +1,129 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>paseo-container</Name>
+  <Repository>ghcr.io/jumpingmushroom/paseo-container:latest</Repository>
+  <Registry>https://github.com/jumpingmushroom/paseo-container/pkgs/container/paseo-container</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/jumpingmushroom/paseo-container/issues</Support>
+  <Project>https://github.com/jumpingmushroom/paseo-container</Project>
+  <Overview>
+    Runs the Paseo daemon with Claude Code and Codex. Connect from the Paseo
+    desktop and phone apps through Paseo's end-to-end encrypted relay, or on
+    the LAN on port 6767. Agents keep running when every app disconnects.
+
+    After the first boot, pair a device with:
+    docker exec -it -u paseo -e PASEO_HOME=/config/paseo paseo-container paseo daemon pair
+
+    Exclude this container from automatic updates and from backups that stop
+    containers: a restart interrupts any agent turn that is running.
+  </Overview>
+  <Category>Productivity: Tools:Utilities</Category>
+  <WebUI>http://[IP]:[PORT:6767]/</WebUI>
+  <Icon>https://paseo.sh/favicon.svg</Icon>
+  <ExtraParams>--hostname=paseo --stop-timeout=30</ExtraParams>
+  <PostArgs></PostArgs>
+  <DonateText></DonateText>
+  <DonateLink></DonateLink>
+
+  <Config Name="Paseo" Target="6767" Default="6767" Mode="tcp"
+          Description="Paseo API, web UI, and LAN direct connections."
+          Type="Port" Display="always" Required="true" Mask="false">6767</Config>
+
+  <Config Name="SSH" Target="22" Default="2223" Mode="tcp"
+          Description="SSH port. Connect with: ssh -p 2223 paseo@[IP]"
+          Type="Port" Display="always" Required="true" Mask="false">2223</Config>
+
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/paseo-container"
+          Mode="rw"
+          Description="Paseo state, the relay keypair, worktrees, agent logins, SSH keys, and tools."
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/paseo-container</Config>
+
+  <Config Name="Workspace" Target="/home/paseo/workspace" Default="/mnt/user/code" Mode="rw"
+          Description="Your source repositories. Mounted inside the home directory so the apps can suggest folders from it."
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/code</Config>
+
+  <Config Name="PASEO_PASSWORD" Target="PASEO_PASSWORD" Default="" Mode=""
+          Description="Password for LAN direct connections. Leave empty and the container generates one in /config/paseo/password."
+          Type="Variable" Display="always" Required="false" Mask="true"></Config>
+
+  <Config Name="PASEO_HOSTNAMES" Target="PASEO_HOSTNAMES" Default="" Mode=""
+          Description="Extra host names the daemon accepts, comma-separated, for example tower.local. IP addresses always work."
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <Config Name="SSH_PUBKEY" Target="SSH_PUBKEY" Default="" Mode=""
+          Description="Your SSH public key. Password authentication is disabled."
+          Type="Variable" Display="always" Required="true" Mask="false"></Config>
+
+  <Config Name="AGENTS" Target="AGENTS" Default="claude,codex" Mode=""
+          Description="Comma-separated coding agents to install on boot. Supported: claude, codex."
+          Type="Variable" Display="always" Required="false" Mask="false">claude,codex</Config>
+
+  <Config Name="GIT_USER_NAME" Target="GIT_USER_NAME" Default="" Mode=""
+          Description="Seeds git user.name on the first boot."
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <Config Name="GIT_USER_EMAIL" Target="GIT_USER_EMAIL" Default="" Mode=""
+          Description="Seeds git user.email on the first boot."
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <Config Name="GIT_TOKEN" Target="GIT_TOKEN" Default="" Mode=""
+          Description="Access token for pushing. Seeds /config/git/credentials on the first boot."
+          Type="Variable" Display="always" Required="false" Mask="true"></Config>
+
+  <Config Name="GIT_TOKEN_HOST" Target="GIT_TOKEN_HOST" Default="github.com" Mode=""
+          Description="Host that GIT_TOKEN authenticates to."
+          Type="Variable" Display="advanced" Required="false" Mask="false">github.com</Config>
+
+  <Config Name="GH_TOKEN" Target="GH_TOKEN" Default="" Mode=""
+          Description="Token for the GitHub CLI. Optional when you sign in with gh auth login."
+          Type="Variable" Display="always" Required="false" Mask="true"></Config>
+
+  <Config Name="NPM_TOOLS" Target="NPM_TOOLS" Default="" Mode=""
+          Description="npm packages to install into /config/tools."
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <Config Name="PYTHON_TOOLS" Target="PYTHON_TOOLS" Default="" Mode=""
+          Description="PyPI packages to install into /config/tools with uv, for example python-openstackclient."
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <Config Name="BIN_TOOLS" Target="BIN_TOOLS" Default="" Mode=""
+          Description="Single-binary tools as name=url pairs separated by spaces, for example kubectl=https://dl.k8s.io/release/v1.34.1/bin/linux/amd64/kubectl. Append #sha256=HEX to verify a download."
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <Config Name="HOME_PERSIST" Target="HOME_PERSIST" Default=".config/ .kube/ .talos/" Mode=""
+          Description="Home-directory paths kept in /config/home across recreates."
+          Type="Variable" Display="advanced" Required="false" Mask="false">.config/ .kube/ .talos/</Config>
+
+  <Config Name="APT_PACKAGES" Target="APT_PACKAGES" Default="" Mode=""
+          Description="Debian packages to install on every boot. Keep the list short."
+          Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="AGENT_UPDATE" Target="AGENT_UPDATE" Default="0" Mode=""
+          Description="Set to 1 for one boot to reinstall every agent."
+          Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+
+  <Config Name="TOOL_UPDATE" Target="TOOL_UPDATE" Default="0" Mode=""
+          Description="Set to 1 for one boot to reinstall every tool."
+          Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+
+  <Config Name="SSHD_ENABLED" Target="SSHD_ENABLED" Default="1" Mode=""
+          Description="Set to 0 to boot without SSH."
+          Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+
+  <Config Name="PUID" Target="PUID" Default="99" Mode=""
+          Description="User ID that owns files. 99 is Unraid's nobody."
+          Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+
+  <Config Name="PGID" Target="PGID" Default="100" Mode=""
+          Description="Group ID that owns files. 100 is Unraid's users."
+          Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+
+  <Config Name="UMASK" Target="UMASK" Default="022" Mode=""
+          Description="File creation mask for Paseo, its agents, and SSH shells."
+          Type="Variable" Display="advanced" Required="false" Mask="false">022</Config>
+
+  <Config Name="TZ" Target="TZ" Default="UTC" Mode=""
+          Description="Time zone, for example Europe/Oslo."
+          Type="Variable" Display="advanced" Required="false" Mask="false">UTC</Config>
+</Container>

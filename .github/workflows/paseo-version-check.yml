@@ -1,0 +1,82 @@
+name: paseo-version-check
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: check
+        name: Compare pinned Paseo and gh versions against upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          semver='^[0-9]+\.[0-9]+\.[0-9]+$'
+
+          paseo_latest="$(npm view @getpaseo/cli version)"
+          paseo_pinned="$(grep -oP 'ARG PASEO_VERSION=\K.*' Dockerfile)"
+          printf '%s' "$paseo_latest" | grep -qE "$semver" \
+            || { echo "npm returned an unusable Paseo version: $paseo_latest" >&2; exit 1; }
+
+          gh_latest="$(gh api repos/cli/cli/releases/latest --jq .tag_name)"
+          gh_latest="${gh_latest#v}"
+          gh_pinned="$(grep -oP 'ARG GH_VERSION=\K.*' Dockerfile)"
+          printf '%s' "$gh_latest" | grep -qE "$semver" \
+            || { echo "GitHub returned an unusable gh version: $gh_latest" >&2; exit 1; }
+
+          echo "paseo pinned=${paseo_pinned} latest=${paseo_latest}"
+          echo "gh pinned=${gh_pinned} latest=${gh_latest}"
+
+          changes=""
+          if [ "$paseo_pinned" != "$paseo_latest" ]; then
+            sed -i "s|^ARG PASEO_VERSION=.*|ARG PASEO_VERSION=${paseo_latest}|" Dockerfile
+            changes="${changes}paseo ${paseo_pinned} -> ${paseo_latest}; "
+          fi
+
+          if [ "$gh_pinned" != "$gh_latest" ]; then
+            sums="$(curl -fsSL "https://github.com/cli/cli/releases/download/v${gh_latest}/gh_${gh_latest}_checksums.txt")"
+            amd64="$(printf '%s\n' "$sums" | awk "/gh_${gh_latest}_linux_amd64.tar.gz\$/ {print \$1}")"
+            arm64="$(printf '%s\n' "$sums" | awk "/gh_${gh_latest}_linux_arm64.tar.gz\$/ {print \$1}")"
+            for v in "$amd64" "$arm64"; do
+              [ "${#v}" -eq 64 ] || { echo "invalid gh checksum: $v" >&2; exit 1; }
+            done
+            sed -i \
+              -e "s|^ARG GH_VERSION=.*|ARG GH_VERSION=${gh_latest}|" \
+              -e "s|^ARG GH_SHA256_AMD64=.*|ARG GH_SHA256_AMD64=${amd64}|" \
+              -e "s|^ARG GH_SHA256_ARM64=.*|ARG GH_SHA256_ARM64=${arm64}|" \
+              Dockerfile
+            changes="${changes}gh ${gh_pinned} -> ${gh_latest}; "
+          fi
+
+          if [ -z "$changes" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "changed=true"
+              echo "summary=${changes%; }"
+              echo "branch=chore/deps-paseo-${paseo_latest}-gh-${gh_latest}"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.check.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: ${{ steps.check.outputs.branch }}
+          title: "chore: update ${{ steps.check.outputs.summary }}"
+          commit-message: "chore: update ${{ steps.check.outputs.summary }}"
+          body: |
+            Upstream released new versions: ${{ steps.check.outputs.summary }}.
+
+            CI runs the smoke suite against them. Merge once it is green, then
+            tag a release to publish the image.
+          delete-branch: true
