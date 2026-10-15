@@ -608,6 +608,14 @@ BANNER="$("${COMPOSE[@]}" logs paseo 2>&1)"
 assert_contains "banner names the ssh port" "$BANNER" "container port 22"
 assert_contains "banner names the outbound key" \
     "$BANNER" "/config/ssh/id_ed25519.pub"
+assert_contains "banner names the paseo port" "$BANNER" "container port 6767"
+assert_contains "banner reports the paseo version" "$BANNER" \
+    "$(dexec paseo --version 2>/dev/null | tr -d '\r' | head -n1)"
+assert_contains "banner reports the relay state" "$BANNER" "relay         on"
+assert_contains "banner prints the pairing command" "$BANNER" "paseo daemon pair"
+# shellcheck disable=SC2016 # the single quotes keep $1 for the inner sh
+assert_ok "banner never prints the password" \
+    sh -c '! printf "%s" "$1" | grep -qF smoketest' _ "$BANNER"
 
 echo "== service toggles =="
 "${COMPOSE[@]}" down >/dev/null

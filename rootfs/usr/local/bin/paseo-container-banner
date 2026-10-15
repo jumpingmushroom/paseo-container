@@ -22,15 +22,40 @@ else
     outbound_key="none"
 fi
 
+paseo_version="$(paseo --version 2>/dev/null | head -n1 || echo 'unknown')"
+paseo_version="${paseo_version:-unknown}"
+
+relay="$(jq -r '.daemon.relay.enabled // false' "${PASEO_DIR}/config.json" 2>/dev/null || echo unknown)"
+case "$relay" in
+    true) relay="on" ;;
+    false) relay="off" ;;
+esac
+
+if [ -n "${PASEO_PASSWORD:-}" ]; then
+    lan_auth="password from PASEO_PASSWORD"
+else
+    lan_auth="password in ${PASEO_PASSWORD_FILE}"
+fi
+
 cat <<BANNER
 
   paseo-container
 
+  paseo         ${paseo_version}
   agents        $(list_bin "${AGENT_PREFIX}/bin")
   tools         $(list_bin "${TOOL_PREFIX}/bin")
+  relay         ${relay}
+  lan           container port 6767, ${lan_auth}
   ssh in        container port 22, key-only, user '${CONTAINER_USER}'
   ssh out       ${outbound_key}
   workspace     ${WORKSPACE_DIR}
   config        ${CONFIG_DIR}
+
+  Pair a phone or desktop app:
+    docker exec -it -u ${CONTAINER_USER} -e PASEO_HOME=${PASEO_DIR} <container> paseo daemon pair
+
+  Sign in to the agents:
+    docker exec -it -u ${CONTAINER_USER} <container> claude
+    docker exec -it -u ${CONTAINER_USER} <container> codex login
 
 BANNER
