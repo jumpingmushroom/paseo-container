@@ -39,7 +39,11 @@ assert_contains() {
         _fail "$name" "empty needle: the assertion cannot fail"
         return
     fi
-    if printf '%s' "$haystack" | grep -qF -- "$needle"; then
+    # Match in the shell, not with `printf | grep -q`: grep -q exits on the
+    # first match, and once the haystack outgrows the pipe buffer (Paseo's
+    # logs do), printf dies of SIGPIPE and pipefail turns the match into a
+    # failure.
+    if [[ "$haystack" == *"$needle"* ]]; then
         _pass "$name"
     else
         _fail "$name" "expected output to contain '$needle', got '$haystack'"
