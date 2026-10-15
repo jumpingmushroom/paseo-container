@@ -24,6 +24,15 @@ if [ -z "${TERM:-}" ] || [ "$TERM" = "dumb" ]; then
     TERM="xterm-256color"
 fi
 
+# Agents start MCP servers such as `uvx some-server` straight from the daemon,
+# without a login shell, so profile.d never runs for them. The daemon carries
+# the same uv environment an interactive shell gets, or those servers cache
+# into the ephemeral home directory and may build against the image's Python.
+uv_env=()
+while IFS= read -r pair; do
+    uv_env+=("$pair")
+done < <(tool_env)
+
 log "starting paseo on 0.0.0.0:6767"
 # The supervisor is exec'd directly rather than through `paseo daemon run`,
 # because that command deletes PASEO_DESKTOP_MANAGED, and that variable is
@@ -31,6 +40,12 @@ log "starting paseo on 0.0.0.0:6767"
 # removed because an inherited NODE_ENV=production breaks worktree setup
 # (getpaseo/paseo#4614). Everything else in the container environment, such
 # as an operator's ANTHROPIC_API_KEY or GH_TOKEN, passes through to agents.
+#
+# CLAUDE_CONFIG_DIR is deliberately absent. With it set, Claude Code reads its
+# user config from $CLAUDE_CONFIG_DIR/.claude.json instead of ~/.claude.json,
+# so agents would never see an MCP server you add from a shell. CODEX_HOME has
+# no such split: Codex reads $CODEX_HOME/config.toml, which is
+# ~/.codex/config.toml either way.
 exec /command/s6-setuidgid "$CONTAINER_USER" \
     env -u NODE_ENV \
         HOME="$USER_HOME" \
@@ -40,9 +55,9 @@ exec /command/s6-setuidgid "$CONTAINER_USER" \
         PASEO_PASSWORD="$password" \
         PASEO_WEB_UI_ENABLED=true \
         PASEO_DESKTOP_MANAGED=1 \
-        CLAUDE_CONFIG_DIR="${USER_HOME}/.claude" \
         CODEX_HOME="${USER_HOME}/.codex" \
         XDG_CONFIG_HOME="${USER_HOME}/.config" \
         TERM="$TERM" \
         SHELL=/bin/bash \
+        "${uv_env[@]}" \
     node "$entry"

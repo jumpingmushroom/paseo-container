@@ -92,8 +92,14 @@ install_agent() {
 # absolute path, a path with a ".." segment, and the share's mount point or
 # anything above or below it. Linking the share would delete your
 # repositories or abort the boot, so the loop warns and moves on instead.
+#
+# An entry equal to or inside an earlier one is skipped with a warning too:
+# once .config/ is linked, .config/gh/ already lives in /config, and linking
+# it a second time would point it at itself.
 HOME_PERSIST="${HOME_PERSIST-.config/ .kube/ .talos/}"
 share_rel="${WORKSPACE_DIR#"${USER_HOME}"/}"
+accepted_rels=()
+accepted_entries=()
 while IFS= read -r entry; do
     case "$entry" in
         /*) warn "HOME_PERSIST: ignoring '${entry}': must be relative to home"; continue ;;
@@ -119,6 +125,18 @@ while IFS= read -r entry; do
     case "${share_rel}/" in
         "${rel}"/*) warn "HOME_PERSIST: ignoring '${entry}': contains the share"; continue ;;
     esac
+    covered=""
+    for i in "${!accepted_rels[@]}"; do
+        case "${rel}/" in
+            "${accepted_rels[$i]}"/*) covered="${accepted_entries[$i]}"; break ;;
+        esac
+    done
+    if [ -n "$covered" ]; then
+        warn "HOME_PERSIST: ignoring '${entry}': already persisted under '${covered}'"
+        continue
+    fi
+    accepted_rels+=("$rel")
+    accepted_entries+=("$entry")
     link_persist "${CONFIG_DIR}/home/${rel}${slash}" "${USER_HOME}/${rel}"
     chown -h "${PUID:-99}:${PGID:-100}" "${USER_HOME}/${rel}"
     if [ -e "${CONFIG_DIR}/home/${rel}" ]; then

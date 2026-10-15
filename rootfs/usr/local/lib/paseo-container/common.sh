@@ -47,6 +47,12 @@ die() {
 # A trailing slash on SOURCE marks it as a directory, which link_persist then
 # creates. Without it, SOURCE is treated as a regular file and left for
 # whoever writes through TARGET to create.
+#
+# When TARGET already resolves to SOURCE -- because a parent directory of
+# TARGET is itself a link into /config, as ~/.config/gh is once ~/.config is
+# linked -- there is nothing to do, and link_persist returns without touching
+# either path. Without this check the "both exist" branch below would delete
+# SOURCE through TARGET and then link SOURCE to itself.
 link_persist() {
     local source="$1" target="$2" source_is_dir=0
 
@@ -55,6 +61,11 @@ link_persist() {
     esac
     source="${source%/}"
     target="${target%/}"
+
+    if [ -e "$target" ] \
+        && [ "$(readlink -f "$target")" = "$(readlink -f "$source")" ]; then
+        return 0
+    fi
 
     mkdir -p "$(dirname "$source")" "$(dirname "$target")"
 
@@ -107,9 +118,10 @@ npm_agent_install() {
 }
 
 # tool_env: prints the environment every uv invocation in this image needs, so
-# that an interactive `uvx` in a pane and the boot-time PYTHON_TOOLS install
-# agree on where things live -- all of it under TOOL_PREFIX, which is on the
-# /config volume.
+# that an interactive `uvx` in a pane, an MCP server an agent starts, and the
+# boot-time PYTHON_TOOLS install agree on where things live -- all of it under
+# TOOL_PREFIX, which is on the /config volume. The paseo-daemon run script
+# passes it to the daemon, which hands it to every agent.
 #
 # Keep this in sync with /etc/profile.d/paseo-container.sh, which exports the
 # same five variables into interactive shells; the profile script cannot

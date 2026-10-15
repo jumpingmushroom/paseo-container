@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Puts operator-installed agents and tools on PATH for interactive shells,
-# including the shells Paseo spawns for its agents.
+# Puts operator-installed agents and tools on PATH for login shells, such as
+# an SSH session. Processes the daemon starts directly, agents and the MCP
+# servers they launch among them, get the same PATH and uv environment from
+# the paseo-daemon run script instead, because no login shell runs for them.
 
 for dir in /config/tools/bin /config/agents/bin; do
     case ":${PATH}:" in

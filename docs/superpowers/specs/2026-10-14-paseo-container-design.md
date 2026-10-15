@@ -200,15 +200,20 @@ Environment for the supervisor:
 | `PASEO_LISTEN` | `0.0.0.0:6767` |
 | `PASEO_PASSWORD` | The operator's value, or the contents of `/config/paseo/password` |
 | `PASEO_HOSTNAMES` | Passed through when set |
+| `PASEO_WEB_UI_ENABLED` | `true` |
 | `PASEO_DESKTOP_MANAGED` | `1` |
-| `CLAUDE_CONFIG_DIR` | `/home/paseo/.claude` |
 | `CODEX_HOME` | `/home/paseo/.codex` |
 | `XDG_CONFIG_HOME` | `/home/paseo/.config` |
 | `TERM` | `xterm-256color` when s6 sets `dumb` |
 | `SHELL` | `/bin/bash` |
+| `UV_TOOL_DIR`, `UV_TOOL_BIN_DIR`, `UV_PYTHON_INSTALL_DIR`, `UV_PYTHON_PREFERENCE`, `UV_CACHE_DIR` | The values `tool_env` prints, as for interactive shells |
 
 The script does not set `NODE_ENV`, because Paseo issue #4614 reports that an
 inherited `NODE_ENV=production` breaks worktree setup.
+
+The script does not set `CLAUDE_CONFIG_DIR`. With it set, Claude Code reads
+its user config from `$CLAUDE_CONFIG_DIR/.claude.json` instead of
+`~/.claude.json`, and agents would never see an MCP server added from a shell.
 
 The script starts in `/home/paseo/workspace` and applies the `UMASK` that
 `01-user-setup` recorded.
