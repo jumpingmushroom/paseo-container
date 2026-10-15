@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
   check:
@@ -64,19 +65,25 @@ jobs:
             {
               echo "changed=true"
               echo "summary=${changes%; }"
-              echo "branch=chore/deps-paseo-${paseo_latest}-gh-${gh_latest}"
             } >> "$GITHUB_OUTPUT"
           fi
 
-      - if: steps.check.outputs.changed == 'true'
+      - id: pr
+        if: steps.check.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
-          branch: ${{ steps.check.outputs.branch }}
+          branch: chore/deps-update
           title: "chore: update ${{ steps.check.outputs.summary }}"
           commit-message: "chore: update ${{ steps.check.outputs.summary }}"
           body: |
             Upstream released new versions: ${{ steps.check.outputs.summary }}.
 
-            CI runs the smoke suite against them. Merge once it is green, then
-            tag a release to publish the image.
+            This workflow dispatches CI on this branch; merge once it is green,
+            then tag a release.
           delete-branch: true
+
+      - if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        name: Dispatch CI on the update branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run ci.yml --ref chore/deps-update
