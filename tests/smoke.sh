@@ -78,6 +78,25 @@ echo "== boot =="
 "${COMPOSE[@]}" up -d
 wait_for "container reaches s6 ready" 240 boot_complete
 
+echo "== agents install on the first boot =="
+# /config starts empty this run (see the rm -rf of TMP_DIR above), and this is
+# the first boot, so nothing has yet had a chance to repair a failed install:
+# 04-agents installs again on any boot that finds an agent missing. Asserting
+# here, before the first restart or recreate, is what makes this catch a
+# first-boot install failure instead of a self-healed one. boot_complete only
+# succeeds after 05-tools, which runs after 04-agents, so the install has
+# already run to completion.
+FIRST_BOOT_LOGS="$("${COMPOSE[@]}" logs paseo 2>&1)"
+assert_ok "claude installed on the first boot" \
+    dexec test -x /config/agents/bin/claude
+# shellcheck disable=SC2016 # $1 must expand inside the sh -c subshell below,
+# not on the host shell where shellcheck reads this line.
+assert_ok "first boot logged no agent install failure" \
+    sh -c '! printf "%s" "$1" | grep -q "install failed"' _ "$FIRST_BOOT_LOGS"
+assert_ok "claude runs as paseo" dexec_user /config/agents/bin/claude --version
+# compose.yaml installs codex alongside claude by default.
+assert_ok "codex runs as paseo" dexec_user /config/agents/bin/codex --version
+
 echo "== base image =="
 assert_eq "paseo user has PUID" "$PUID" "$(dexec id -u paseo | tr -d '\r')"
 assert_eq "paseo user has PGID" "$PGID" "$(dexec id -g paseo | tr -d '\r')"
@@ -130,6 +149,31 @@ assert_fail "the paseo user cannot overwrite Paseo" \
 # shellcheck disable=SC2016 # $1 expands in the inner sh, not here.
 assert_ok "the daemon finds claude on PATH" \
     sh -c 'printf "%s" "$1" | grep -q "^PATH=.*/config/agents/bin"' _ "$DAEMON_ENV"
+# Agents start MCP servers such as `uvx some-server` without a login shell, so
+# the uv environment profile.d exports has to come from the daemon itself.
+assert_contains "the daemon points uv's cache at /config" "$DAEMON_ENV" \
+    "UV_CACHE_DIR=/config/tools/uv/cache"
+assert_contains "the daemon keeps uv off the image's Python" "$DAEMON_ENV" \
+    "UV_PYTHON_PREFERENCE=only-managed"
+
+echo "== agents see the MCP servers a shell adds =="
+# Claude Code reads its user config from $CLAUDE_CONFIG_DIR/.claude.json when
+# that variable is set and from ~/.claude.json otherwise. A shell has no such
+# variable, so the daemon must not have one either, or an MCP server you add
+# from a shell never reaches an agent.
+# shellcheck disable=SC2016 # $1 expands in the inner sh, not here.
+assert_ok "CLAUDE_CONFIG_DIR is not set for the daemon" \
+    sh -c '! printf "%s" "$1" | grep -q "^CLAUDE_CONFIG_DIR="' _ "$DAEMON_ENV"
+assert_ok "a shell adds a user-scoped MCP server" \
+    dexec_user /config/agents/bin/claude mcp add --scope user smoke-mcp -- true
+# Runs claude with exactly the supervisor's environment, as an agent would.
+MCP_LIST=""
+if [ -n "$DAEMON_PID" ]; then
+    MCP_LIST="$(dexec_user sh -c "cd /home/paseo && xargs -0 -a /proc/${DAEMON_PID}/environ \
+        sh -c 'exec env -i \"\$@\" /config/agents/bin/claude mcp list' _" 2>&1 | tr -d '\r' || true)"
+fi
+assert_contains "the daemon's claude sees that MCP server" "$MCP_LIST" "smoke-mcp"
+dexec_user /config/agents/bin/claude mcp remove --scope user smoke-mcp >/dev/null 2>&1 || true
 
 echo "== relay is seeded once =="
 assert_eq "config.json turns the relay on" "true" \
@@ -303,6 +347,39 @@ assert_contains "the share entry is reported" \
 wait_for "container returns to the default HOME_PERSIST" 240 paseo_healthy
 rm -rf "$TMP_DIR/config/home/workspace" "$TMP_DIR/workspace/.persist-canary"
 
+echo "== HOME_PERSIST skips an entry inside an earlier one =="
+# With .config/ linked, ~/.config/gh already resolves to /config/home/.config/gh.
+# Linking it again would see the link's own source as an existing target,
+# delete it, and leave a symlink that points at itself.
+dexec_user sh -c 'mkdir -p /config/home/.config/gh \
+    && echo gh-canary > /config/home/.config/gh/hosts.yml'
+"${COMPOSE[@]}" down >/dev/null
+OVERLAP_SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+HOME_PERSIST=".config/ .config/gh/ .kube/" "${COMPOSE[@]}" up -d
+wait_for "container boots with overlapping HOME_PERSIST entries" 240 paseo_healthy
+assert_eq "a nested entry keeps its data on the first boot" "gh-canary" \
+    "$(dexec cat /config/home/.config/gh/hosts.yml 2>&1 | tr -d '\r')"
+"${COMPOSE[@]}" restart paseo >/dev/null
+wait_for "container returns with overlapping HOME_PERSIST entries" 240 paseo_healthy
+assert_eq "a nested entry keeps its data on a second boot" "gh-canary" \
+    "$(dexec cat /home/paseo/.config/gh/hosts.yml 2>&1 | tr -d '\r')"
+# A symlink that points at itself fails test -d; a real directory passes.
+# shellcheck disable=SC2088 # the tilde is label text, not a path.
+assert_ok "~/.config/gh is still a directory" dexec test -d /home/paseo/.config/gh
+assert_fail "the persisted gh directory is not a symlink" \
+    dexec test -L /config/home/.config/gh
+# Linking a directory onto itself through ln -s, once the target is a real
+# directory again, plants the loop one level down instead: gh/gh -> gh.
+# shellcheck disable=SC2016 # the $() must expand inside the container.
+assert_ok "the persisted gh directory holds no symlink loop" \
+    dexec sh -c 'test -z "$(find /config/home/.config/gh -type l)"'
+assert_contains "the nested entry is reported" \
+    "$("${COMPOSE[@]}" logs --since "$OVERLAP_SINCE" paseo 2>&1)" \
+    "HOME_PERSIST: ignoring '.config/gh/': already persisted under '.config/'"
+"${COMPOSE[@]}" down >/dev/null
+"${COMPOSE[@]}" up -d
+wait_for "container returns to the default HOME_PERSIST" 240 paseo_healthy
+
 echo "== outbound git credential =="
 # compose.yaml sets an obviously fake GIT_TOKEN. What matters is where the
 # token lands, how it is protected, and that git actually reaches for it.
@@ -328,21 +405,7 @@ assert_eq "an ssh remote resolves to https" \
         && git ls-remote --get-url origin' | tr -d '\r')"
 dexec_user sh -c 'rm -rf /workspace/.credential-probe'
 
-echo "== agents install on the first boot =="
-# /config starts empty this run (see the rm -rf of TMP_DIR above), so this is
-# the one point in the suite where /config/agents ownership has not yet been
-# self-healed by a later boot's recursive chown in 04-agents/run.
-# boot_complete only succeeds after 05-tools, which runs after 04-agents, so
-# by the time it succeeded above, the install already ran to completion. Asserting here, before the first restart below, is what
-# makes this catch a first-boot install failure instead of a self-healed one.
-FIRST_BOOT_LOGS="$("${COMPOSE[@]}" logs paseo 2>&1)"
-assert_ok "claude installed on the first boot" \
-    dexec test -x /config/agents/bin/claude
-# shellcheck disable=SC2016 # $1 must expand inside the sh -c subshell below,
-# not on the host shell where shellcheck reads this line.
-assert_ok "first boot logged no agent install failure" \
-    sh -c '! printf "%s" "$1" | grep -q "install failed"' _ "$FIRST_BOOT_LOGS"
-
+echo "== agents do not update themselves =="
 # Agents must not update themselves. npm's rename-and-remove cannot finish
 # while the running agent holds its own executable open, and on a FUSE-backed
 # /config that half-done install destroys it -- see the "Agents do not update
@@ -614,6 +677,8 @@ assert_contains "banner reports the paseo version" "$BANNER" \
     "$(dexec paseo --version 2>/dev/null | tr -d '\r' | head -n1)"
 assert_contains "banner reports the relay state" "$BANNER" "relay         on"
 assert_contains "banner prints the pairing command" "$BANNER" "paseo daemon pair"
+assert_contains "banner reports the claude version" "$BANNER" \
+    "claude        $(dexec_user /config/agents/bin/claude --version 2>/dev/null | tr -d '\r' | head -n1)"
 # shellcheck disable=SC2016 # the single quotes keep $1 for the inner sh
 assert_ok "banner never prints the password" \
     sh -c '! printf "%s" "$1" | grep -qF smoketest' _ "$BANNER"
