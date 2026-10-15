@@ -1,9 +1,13 @@
 paseo-container
 Copyright 2026 jumpingmushroom
 
-This product installs, but does not redistribute, the following software at
-build time:
+The container image built from this repository includes the following
+third-party software, each under its own license:
 
 - Paseo (https://github.com/getpaseo/paseo), licensed under the Apache
-  License, Version 2.0.
+  License, Version 2.0. Paseo's npm packages ship without a license file, so
+  the image carries a copy of Paseo's LICENSE at
+  /usr/share/doc/paseo/LICENSE.
 - GitHub CLI (https://github.com/cli/cli), licensed under the MIT License.
+  The image carries the license from the release archive at
+  /usr/share/doc/gh/LICENSE.

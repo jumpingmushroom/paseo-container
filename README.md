@@ -160,12 +160,14 @@ pull requests**.
 
 ## Attribution
 
-This product installs, but does not redistribute, the following software at
-build time:
+The container image includes the following third-party software, each under
+its own license:
 
 - [Paseo](https://github.com/getpaseo/paseo), licensed under the Apache
-  License, Version 2.0.
+  License, Version 2.0. The image carries its license at
+  `/usr/share/doc/paseo/LICENSE`.
 - [GitHub CLI](https://github.com/cli/cli), licensed under the MIT License.
+  The image carries its license at `/usr/share/doc/gh/LICENSE`.
 
 See [NOTICE](NOTICE) for the full attribution text.
 

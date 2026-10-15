@@ -166,7 +166,8 @@ RUN set -eux; \
 
 # gh, the GitHub CLI. Agents reach for it for pull requests, issues, and CI
 # logs. Debian's package lags upstream, so the release tarball is used, pinned
-# by version and digest like Node and uv.
+# by version and digest like Node and uv. Its MIT license comes out of the
+# same archive, because the image redistributes gh.
 RUN set -eux; \
     case "${TARGETARCH}" in \
       amd64) gharch="amd64"; ghsha="${GH_SHA256_AMD64}" ;; \
@@ -179,6 +180,9 @@ RUN set -eux; \
     echo "${ghsha}  /tmp/gh.tar.gz" | sha256sum -c -; \
     tar -C /usr/local --strip-components=1 --no-same-owner -xzf /tmp/gh.tar.gz \
       "gh_${GH_VERSION}_linux_${gharch}/bin/gh"; \
+    mkdir -p /usr/share/doc/gh; \
+    tar -C /usr/share/doc/gh --strip-components=1 --no-same-owner -xzf /tmp/gh.tar.gz \
+      "gh_${GH_VERSION}_linux_${gharch}/LICENSE"; \
     rm -f /tmp/gh.tar.gz; \
     gh --version
 
@@ -218,6 +222,6 @@ EXPOSE 22 6767
 # The long start period covers the first boot, which installs agents and
 # tools before the daemon starts.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
-  CMD curl -fsS -o /dev/null http://127.0.0.1:6767/api/health || exit 1
+  CMD ["curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:6767/api/health"]
 
 ENTRYPOINT ["/init"]
