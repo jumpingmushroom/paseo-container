@@ -10,7 +10,8 @@ mkdir -p \
     "${AGENT_PREFIX}/bin" \
     "${AGENT_PREFIX}/state" \
     "${TOOL_PREFIX}/bin" \
-    "${CONFIG_DIR}/git"
+    "${CONFIG_DIR}/git" \
+    "${CONFIG_DIR}/home"
 
 link_persist "${CONFIG_DIR}/git/gitconfig" "${USER_HOME}/.gitconfig"
 
@@ -76,7 +77,8 @@ chown "${PUID:-99}:${PGID:-100}" \
     "${TOOL_PREFIX}" \
     "${TOOL_PREFIX}/bin" \
     "${CONFIG_DIR}/git" \
-    "${CONFIG_DIR}/git/gitconfig"
+    "${CONFIG_DIR}/git/gitconfig" \
+    "${CONFIG_DIR}/home"
 # An `[ -e ] && chown` one-liner here would end the script under `set -e` on
 # every boot with no credential file, taking the whole container with it.
 if [ -e "${GIT_CREDENTIALS}" ]; then

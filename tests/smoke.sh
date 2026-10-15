@@ -109,6 +109,20 @@ assert_eq "/workspace is a symlink to the share" "/home/paseo/workspace" \
     "$(dexec readlink /workspace | tr -d '\r')"
 dexec rm -rf /home/paseo/workspace/.owner-probe
 
+echo "== HOME_PERSIST =="
+for rel in .config .kube .talos; do
+    assert_eq "~/${rel} links to /config/home" "/config/home/${rel}" \
+        "$(dexec readlink "/home/paseo/${rel}" | tr -d '\r')"
+done
+dexec_user sh -c 'printf "apiVersion: v1\n" > /home/paseo/.kube/config'
+"${COMPOSE[@]}" down >/dev/null
+"${COMPOSE[@]}" up -d
+wait_for "container returns after a recreate" 240 boot_complete
+assert_eq "a kubeconfig survives a recreate" "apiVersion: v1" \
+    "$(dexec cat /home/paseo/.kube/config | tr -d '\r')"
+assert_eq "persisted config is owned by paseo" "paseo" \
+    "$(dexec stat -c '%U' /config/home/.kube/config | tr -d '\r')"
+
 echo "== outbound git credential =="
 # compose.yaml sets an obviously fake GIT_TOKEN. What matters is where the
 # token lands, how it is protected, and that git actually reaches for it.

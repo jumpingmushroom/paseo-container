@@ -79,6 +79,24 @@ install_agent() {
     )
 }
 
+# HOME_PERSIST names home-directory paths that tools other than the agents
+# keep their configuration in: gh's credentials under .config/gh, the
+# OpenStack client's .config/openstack/clouds.yaml, kubeconfig, talosconfig.
+# The home directory is not persisted, so without a link each of those is
+# lost on every recreate. These links run before any agent installs, for the
+# same reason the agents' own persist paths do.
+HOME_PERSIST="${HOME_PERSIST-.config/ .kube/ .talos/}"
+while IFS= read -r rel; do
+    case "$rel" in
+        /*|*..*) warn "HOME_PERSIST: ignoring '${rel}': must be relative to home"; continue ;;
+    esac
+    link_persist "${CONFIG_DIR}/home/${rel}" "${USER_HOME}/${rel}"
+    chown -h "${PUID:-99}:${PGID:-100}" "${USER_HOME}/${rel%/}"
+    if [ -e "${CONFIG_DIR}/home/${rel%/}" ]; then
+        chown -h "${PUID:-99}:${PGID:-100}" "${CONFIG_DIR}/home/${rel%/}"
+    fi
+done < <(printf '%s\n' "$HOME_PERSIST" | tr -s '[:space:]' '\n' | sed '/^$/d')
+
 AGENTS="${AGENTS-claude}"
 if [ -z "$AGENTS" ]; then
     log "AGENTS is empty; installing no agents"
@@ -91,6 +109,6 @@ else
     done
 fi
 
-chown -R "${PUID:-99}:${PGID:-100}" "$AGENT_PREFIX"
+chown -R "${PUID:-99}:${PGID:-100}" "$AGENT_PREFIX" "${CONFIG_DIR}/home"
 chown_home "${PUID:-99}:${PGID:-100}"
 log "ready"

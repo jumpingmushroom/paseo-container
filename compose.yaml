@@ -37,6 +37,7 @@ services:
       # the credential is stored, not that it authenticates anywhere.
       GIT_TOKEN: "${GIT_TOKEN-smoke-not-a-real-token}"
       GIT_TOKEN_HOST: "${GIT_TOKEN_HOST:-github.com}"
+      HOME_PERSIST: "${HOME_PERSIST-.config/ .kube/ .talos/}"
     volumes:
       - ./tests/.tmp/config:/config
       - ./tests/.tmp/workspace:/home/paseo/workspace
