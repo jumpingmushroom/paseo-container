@@ -345,8 +345,9 @@ assert_ok "first boot logged no agent install failure" \
 
 # Agents must not update themselves. npm's rename-and-remove cannot finish
 # while the running agent holds its own executable open, and on a FUSE-backed
-# /config that half-done install destroys it -- see docs/agents.md. Two
-# independent guards stand in the way, asserted separately so that losing
+# /config that half-done install destroys it -- see the "Agents do not update
+# themselves" section of docs/agents.md. Two independent guards stand in the
+# way, asserted separately so that losing
 # either one is visible here rather than only when an update eats an install:
 # the updater is off, and npm's default prefix is somewhere the agent user
 # could not write even if it ran anyway.

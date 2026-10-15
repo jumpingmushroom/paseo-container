@@ -206,7 +206,7 @@ RUN set -eux; \
     ln -s /home/paseo/workspace /workspace; \
     chown paseo:paseo /config /home/paseo/workspace
 
-COPY LICENSE /usr/share/doc/paseo-container/
+COPY LICENSE NOTICE /usr/share/doc/paseo-container/
 COPY rootfs/ /
 
 RUN set -eux; \

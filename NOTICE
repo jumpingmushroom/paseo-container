@@ -1,0 +1,9 @@
+paseo-container
+Copyright 2026 jumpingmushroom
+
+This product installs, but does not redistribute, the following software at
+build time:
+
+- Paseo (https://github.com/getpaseo/paseo), licensed under the Apache
+  License, Version 2.0.
+- GitHub CLI (https://github.com/cli/cli), licensed under the MIT License.

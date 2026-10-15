@@ -7,3 +7,4 @@ compose.yaml
 README.md
 *.md
 !LICENSE
+!NOTICE
