@@ -410,7 +410,7 @@ printf '#!/bin/sh\necho hello-bin\n' > "$TMP_DIR/config/fixtures/hello"
 GOOD_SHA="$(sha256sum "$TMP_DIR/config/fixtures/hello" | cut -d' ' -f1)"
 BAD_SHA="0000000000000000000000000000000000000000000000000000000000000000"
 "${COMPOSE[@]}" down >/dev/null
-BIN_TOOLS="hello=file:///config/fixtures/hello#sha256=${GOOD_SHA} badsum=file:///config/fixtures/hello#sha256=${BAD_SHA} missing=file:///config/fixtures/does-not-exist" \
+BIN_TOOLS="hello=file:///config/fixtures/hello#sha256=${GOOD_SHA} badsum=file:///config/fixtures/hello#sha256=${BAD_SHA} missing=file:///config/fixtures/does-not-exist emptysum=file:///config/fixtures/hello#sha256= shortsum=file:///config/fixtures/hello#sha256=abc" \
     "${COMPOSE[@]}" up -d
 wait_for "container boots with BIN_TOOLS" 240 boot_complete
 assert_eq "a BIN_TOOLS binary runs" "hello-bin" \
@@ -421,7 +421,17 @@ assert_fail "a wrong checksum installs nothing" dexec test -e /config/tools/bin/
 assert_fail "an unreachable URL installs nothing" dexec test -e /config/tools/bin/missing
 assert_ok "no partial download is left behind" \
     dexec sh -c '! ls /config/tools/bin/.bin-tool.* >/dev/null 2>&1'
+assert_fail "an empty checksum installs nothing" dexec test -e /config/tools/bin/emptysum
+assert_fail "a short checksum installs nothing" dexec test -e /config/tools/bin/shortsum
+BIN_LEDGER="$(dexec cat /config/tools/.installed | tr -d '\r')"
+for bad in badsum missing emptysum shortsum; do
+    # shellcheck disable=SC2016 # the script text expands in the inner sh, not here.
+    assert_ok "$bad is absent from the ledger" \
+        sh -c '! printf "%s\n" "$1" | grep -q "^bin ${2}="' _ "$BIN_LEDGER" "$bad"
+done
 BIN_LOGS="$("${COMPOSE[@]}" logs paseo 2>&1)"
+assert_contains "an empty checksum is reported" "$BIN_LOGS" "emptysum: invalid sha256"
+assert_contains "a short checksum is reported" "$BIN_LOGS" "shortsum: invalid sha256"
 assert_contains "a wrong checksum is reported" "$BIN_LOGS" "badsum: checksum mismatch"
 "${COMPOSE[@]}" restart paseo >/dev/null
 wait_for "container returns for the BIN_TOOLS ledger check" 240 boot_complete

@@ -189,14 +189,16 @@ chown_home() {
 #
 # Installs one single-binary tool into TOOL_PREFIX/bin. SPEC is name=url, with
 # an optional #sha256=<hex> suffix on the URL. kubectl and talosctl ship as
-# plain executables on neither npm nor PyPI, which is why this exists. The URL
-# names the version, so you pin it.
+# plain executables on neither npm nor PyPI, which is why this exists. You pin
+# the version in the URL.
 #
-# The download lands in a temporary file beside its destination and is
-# renamed into place only after the checksum passes, so a failed or partial
-# download never leaves a broken command on PATH.
+# The function downloads to a temporary file beside the destination and
+# renames it into place only after the checksum passes, so a failed or partial
+# download never puts a broken command on PATH. A #sha256= suffix with a value
+# that is not 64 hex characters fails the install: an empty value must not
+# silently turn verification off.
 bin_tool_install() {
-    local spec="$1" name url sha="" tmp
+    local spec="$1" name url sha="" has_sha=0 tmp
     name="${spec%%=*}"
     url="${spec#*=}"
     if [ -z "$name" ] || [ "$name" = "$spec" ] || [ -z "$url" ]; then
@@ -207,21 +209,37 @@ bin_tool_install() {
         */*|.*) warn "bin: '${name}' is not a plain command name"; return 1 ;;
     esac
     case "$url" in
-        *'#sha256='*) sha="${url##*#sha256=}"; url="${url%#sha256=*}" ;;
+        *'#sha256='*)
+            has_sha=1
+            sha="${url##*#sha256=}"
+            url="${url%#sha256=*}"
+            ;;
     esac
+    if [ "$has_sha" = 1 ] && ! [[ "$sha" =~ ^[0-9a-fA-F]{64}$ ]]; then
+        warn "bin: ${name}: invalid sha256 '${sha}'"
+        return 1
+    fi
 
-    tmp="$(mktemp "${TOOL_PREFIX}/bin/.bin-tool.XXXXXX")"
-    if ! curl -fsSL --retry 3 -o "$tmp" "$url"; then
+    if ! tmp="$(mktemp "${TOOL_PREFIX}/bin/.bin-tool.XXXXXX")"; then
+        warn "bin: ${name}: could not create a temporary file in ${TOOL_PREFIX}/bin"
+        return 1
+    fi
+    if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o "$tmp" "$url"; then
         rm -f "$tmp"
         warn "bin: ${name}: download failed from ${url}"
         return 1
     fi
-    if [ -n "$sha" ] && ! printf '%s  %s\n' "$sha" "$tmp" | sha256sum -c - >/dev/null 2>&1; then
+    if [ "$has_sha" = 1 ] && ! printf '%s  %s\n' "$sha" "$tmp" | sha256sum -c - >/dev/null 2>&1; then
         rm -f "$tmp"
         warn "bin: ${name}: checksum mismatch"
         return 1
     fi
-    chmod 0755 "$tmp"
-    chown "${PUID:-99}:${PGID:-100}" "$tmp"
+    if ! chmod 0755 "$tmp"; then
+        rm -f "$tmp"
+        warn "bin: ${name}: could not make the download executable"
+        return 1
+    fi
+    chown "${PUID:-99}:${PGID:-100}" "$tmp" \
+        || warn "bin: ${name}: could not set ownership"
     mv -f "$tmp" "${TOOL_PREFIX}/bin/${name}"
 }
