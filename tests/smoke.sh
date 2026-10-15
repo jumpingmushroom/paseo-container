@@ -145,6 +145,15 @@ dexec sh -c 'jq ".daemon.relay.enabled = true" /config/paseo/config.json > /tmp/
 "${COMPOSE[@]}" restart paseo >/dev/null
 wait_for "paseo returns with the relay on" 240 paseo_healthy
 
+echo "== an empty config.json is seeded again =="
+# A crash between a truncating redirect and the write leaves a zero-byte file.
+dexec sh -c ': > /config/paseo/config.json'
+"${COMPOSE[@]}" stop -t 30 paseo >/dev/null
+"${COMPOSE[@]}" start paseo >/dev/null
+wait_for "paseo boots with an empty config.json" 240 paseo_healthy
+assert_eq "an empty config.json is seeded with the relay on" "true" \
+    "$(dexec jq -r .daemon.relay.enabled /config/paseo/config.json | tr -d '\r')"
+
 echo "== pairing =="
 PAIR_JSON="$(dexec_user env PASEO_HOME=/config/paseo paseo daemon pair --json 2>/dev/null | tr -d '\r')"
 assert_contains "pair prints a pairing URL" "$PAIR_JSON" "https://app.paseo.sh/#offer="

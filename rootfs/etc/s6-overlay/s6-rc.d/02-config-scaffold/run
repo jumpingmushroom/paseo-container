@@ -68,8 +68,9 @@ fi
 # Paseo's relay is off on a fresh install. You seed it on, once, in config.json
 # rather than with PASEO_RELAY_ENABLED: that variable locks the setting, and
 # the app could then never turn the relay off. A file that already exists is
-# yours, and is never rewritten.
-if [ ! -e "${CONFIG_DIR}/paseo/config.json" ]; then
+# yours, and is never rewritten. An empty file counts as missing: a crash can
+# leave one, and Paseo cannot parse it.
+if [ ! -s "${CONFIG_DIR}/paseo/config.json" ]; then
     printf '%s\n' '{"version":1,"daemon":{"relay":{"enabled":true}}}' \
         > "${CONFIG_DIR}/paseo/config.json"
     log "seeded ${CONFIG_DIR}/paseo/config.json with the relay on"
