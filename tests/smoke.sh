@@ -112,9 +112,14 @@ assert_eq "paseo runs as paseo" "paseo" \
         | tr -d '\r ')"
 assert_ok "paseo state lives in /config/paseo" dexec test -s /config/paseo/daemon-keypair.json
 DAEMON_PID="$(dexec sh -c 'pgrep -u paseo -f "^Paseo Supervisor\$" | head -n1' | tr -d '\r')"
+assert_ok "the supervisor process is found" test -n "$DAEMON_PID"
 # Root in the container lacks CAP_SYS_PTRACE, so only the owner can read
-# another process's environment.
-DAEMON_ENV="$(dexec_user sh -c "tr '\0' '\n' < /proc/${DAEMON_PID}/environ")"
+# another process's environment. With no PID, the environment stays empty and
+# the assertions below fail by name instead of aborting the suite.
+DAEMON_ENV=""
+if [ -n "$DAEMON_PID" ]; then
+    DAEMON_ENV="$(dexec_user sh -c "tr '\0' '\n' < /proc/${DAEMON_PID}/environ" || true)"
+fi
 assert_contains "self-update is refused" "$DAEMON_ENV" "PASEO_DESKTOP_MANAGED=1"
 assert_contains "PASEO_HOME points at /config" "$DAEMON_ENV" "PASEO_HOME=/config/paseo"
 # shellcheck disable=SC2016 # $1 expands in the inner sh, not here.
@@ -136,13 +141,22 @@ wait_for "paseo returns after a clean stop" 240 paseo_healthy
 
 echo "== a stale paseo.pid does not block the next boot =="
 "${COMPOSE[@]}" kill -s SIGKILL paseo >/dev/null
-# SIGKILL normally leaves the supervisor's lock behind. Plant one with this
-# host's boot ID if it did not, so the boot below always meets a stale lock.
-[ -e "$TMP_DIR/config/paseo/paseo.pid" ] \
-    || printf '{"pid":1,"bootId":"%s"}\n' "$(cat /proc/sys/kernel/random/boot_id)" \
-        > "$TMP_DIR/config/paseo/paseo.pid"
+# The lock SIGKILL leaves behind does not block the next boot by itself: in
+# the new container its PID is either free or taken by the new supervisor,
+# and Paseo clears the first and claims the second. So overwrite it with a
+# lock that Paseo reads as live: PID 1, which runs in every container, this
+# host's boot ID, and every field Paseo's pidLockInfoSchema requires, written
+# as one line of JSON the way Paseo writes it. Only 06-paseo-prep removing
+# the file lets the daemon start.
+printf '{"pid":1,"startedAt":"%s","hostname":"paseo","uid":%s,"listen":"0.0.0.0:6767","heartbeat":true,"bootId":"%s"}' \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$PUID" \
+    "$(cat /proc/sys/kernel/random/boot_id)" > "$TMP_DIR/config/paseo/paseo.pid"
+STALE_LOCK_SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 "${COMPOSE[@]}" start paseo >/dev/null
 wait_for "paseo starts despite a stale paseo.pid" 240 paseo_healthy
+assert_contains "the boot removes the stale paseo.pid" \
+    "$("${COMPOSE[@]}" logs --since "$STALE_LOCK_SINCE" paseo 2>&1)" \
+    "removing a stale /config/paseo/paseo.pid"
 
 echo "== config scaffold =="
 for path in ssh agents/bin agents/state git; do
