@@ -28,9 +28,9 @@ if [ ! -s "${CONFIG_DIR}/git/gitconfig" ]; then
     fi
 fi
 
-# An outbound git credential, so an agent can push the work it just did. The
-# container has a home for inbound SSH -- authorized_keys -- and had none for
-# this until now.
+# An outbound git credential, so an agent can push the work it has done. The
+# container has a home for inbound SSH -- authorized_keys -- and this is its
+# counterpart for outbound git.
 #
 # The token lives in its own 0600 file rather than in gitconfig, because
 # gitconfig is a file people paste into issues. GIT_TOKEN seeds it on the
@@ -91,10 +91,10 @@ if [ -z "${PASEO_PASSWORD:-}" ] && [ ! -s "$PASEO_PASSWORD_FILE" ]; then
     log "generated a LAN password in ${PASEO_PASSWORD_FILE}"
 fi
 
-# 01-user-setup already chowned the whole tree recursively earlier this boot,
-# so only the paths this script creates afterward need claiming here. A
-# second recursive chown over all of /config would re-walk agents/state,
-# which grows unbounded over months on a FUSE share, for no benefit.
+# 01-user-setup already claimed every mismatched entry in the tree earlier
+# this boot, so only the paths this script creates afterward need claiming
+# here. A second walk over all of /config would revisit agents/state, which
+# grows unbounded over months on a FUSE share, for no benefit.
 chown "${PUID:-99}:${PGID:-100}" \
     "${CONFIG_DIR}/ssh" \
     "${CONFIG_DIR}/ssh/hostkeys" \

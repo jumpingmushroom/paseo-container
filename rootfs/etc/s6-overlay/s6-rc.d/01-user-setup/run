@@ -40,9 +40,14 @@ fi
 mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR" "$USER_HOME"
 [ -L /workspace ] || ln -sfn "$WORKSPACE_DIR" /workspace
 
-# /config is small and always ours, so recurse. The home directory holds the
-# source share, so chown_home skips it.
-chown -R "$PUID:$PGID" "$CONFIG_DIR"
+# /config is always ours, but it grows: agent state, tool caches, and the
+# worktrees Paseo keeps, node_modules included. A plain `chown -R` would
+# rewrite every inode on every boot, which is slow on a FUSE share such as
+# Unraid's shfs. The walk below still visits everything, but changes only the
+# entries whose owner or group differs, which after the first boot is almost
+# none. The home directory holds the source share, so chown_home skips it.
+find "$CONFIG_DIR" \( ! -uid "$PUID" -o ! -gid "$PGID" \) \
+    -exec chown -h "$PUID:$PGID" {} +
 chown_home "$PUID:$PGID"
 
 # The share can hold many large repositories. Recursing would make boot time
