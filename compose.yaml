@@ -44,6 +44,7 @@ services:
       HOME_PERSIST: "${HOME_PERSIST-.config/ .kube/ .talos/}"
       # The harness password. Like GIT_TOKEN, it never leaves tests/.tmp.
       PASEO_PASSWORD: "${PASEO_PASSWORD-smoketest}"
+      PASEO_HOSTNAMES: "${PASEO_HOSTNAMES-}"
     volumes:
       - ./tests/.tmp/config:/config
       - ./tests/.tmp/workspace:/home/paseo/workspace

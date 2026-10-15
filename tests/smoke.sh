@@ -131,6 +131,82 @@ assert_fail "the paseo user cannot overwrite Paseo" \
 assert_ok "the daemon finds claude on PATH" \
     sh -c 'printf "%s" "$1" | grep -q "^PATH=.*/config/agents/bin"' _ "$DAEMON_ENV"
 
+echo "== relay is seeded once =="
+assert_eq "config.json turns the relay on" "true" \
+    "$(dexec jq -r .daemon.relay.enabled /config/paseo/config.json | tr -d '\r')"
+dexec sh -c 'jq ".daemon.relay.enabled = false" /config/paseo/config.json > /tmp/c \
+    && cat /tmp/c > /config/paseo/config.json'
+"${COMPOSE[@]}" restart paseo >/dev/null
+wait_for "paseo returns after editing config.json" 240 paseo_healthy
+assert_eq "a later boot keeps an edited config.json" "false" \
+    "$(dexec jq -r .daemon.relay.enabled /config/paseo/config.json | tr -d '\r')"
+dexec sh -c 'jq ".daemon.relay.enabled = true" /config/paseo/config.json > /tmp/c \
+    && cat /tmp/c > /config/paseo/config.json'
+"${COMPOSE[@]}" restart paseo >/dev/null
+wait_for "paseo returns with the relay on" 240 paseo_healthy
+
+echo "== pairing =="
+PAIR_JSON="$(dexec_user env PASEO_HOME=/config/paseo paseo daemon pair --json 2>/dev/null | tr -d '\r')"
+assert_contains "pair prints a pairing URL" "$PAIR_JSON" "https://app.paseo.sh/#offer="
+
+echo "== hostnames =="
+# /api/status rather than /api/health, in case the health route is exempt
+# from the Host check as it is from the password.
+assert_eq "an unknown Host is refused" "403" \
+    "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: tower.lan' \
+        -H 'Authorization: Bearer smoketest' "${PASEO_URL}/api/status")"
+"${COMPOSE[@]}" down >/dev/null
+PASEO_HOSTNAMES="tower.lan" "${COMPOSE[@]}" up -d
+wait_for "paseo boots with PASEO_HOSTNAMES" 240 paseo_healthy
+assert_eq "a listed Host is accepted" "200" \
+    "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: tower.lan' \
+        -H 'Authorization: Bearer smoketest' "${PASEO_URL}/api/status")"
+
+echo "== generated password =="
+EMPTY_PW_OVERRIDE="$TMP_DIR/empty-password.compose.yaml"
+cat >"$EMPTY_PW_OVERRIDE" <<'YAML'
+services:
+  paseo:
+    environment:
+      PASEO_PASSWORD: ""
+YAML
+"${COMPOSE[@]}" down >/dev/null
+"${COMPOSE[@]}" -f "$EMPTY_PW_OVERRIDE" up -d
+wait_for "paseo boots without PASEO_PASSWORD" 240 paseo_healthy
+assert_eq "the generated password file is private" "600" \
+    "$(dexec stat -c '%a' /config/paseo/password | tr -d '\r')"
+assert_eq "the generated password file is owned by paseo" "paseo" \
+    "$(dexec stat -c '%U' /config/paseo/password | tr -d '\r')"
+GEN_PW="$(dexec cat /config/paseo/password | tr -d '\r\n')"
+assert_eq "the generated password authenticates" "200" \
+    "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${GEN_PW}" \
+        "${PASEO_URL}/api/status")"
+"${COMPOSE[@]}" -f "$EMPTY_PW_OVERRIDE" restart paseo >/dev/null
+wait_for "paseo returns with the generated password" 240 paseo_healthy
+assert_eq "the generated password is reused across boots" "$GEN_PW" \
+    "$(dexec cat /config/paseo/password | tr -d '\r\n')"
+
+echo "== a password with shell metacharacters =="
+WEIRD_PW_OVERRIDE="$TMP_DIR/weird-password.compose.yaml"
+cat >"$WEIRD_PW_OVERRIDE" <<'YAML'
+services:
+  paseo:
+    environment:
+      PASEO_PASSWORD: 'p@ss$$HOME"quoted"`tick`'
+YAML
+"${COMPOSE[@]}" down >/dev/null
+"${COMPOSE[@]}" -f "$WEIRD_PW_OVERRIDE" up -d
+wait_for "paseo boots with a metacharacter password" 240 paseo_healthy
+# shellcheck disable=SC2016 # the password is literal text, not an expansion.
+assert_eq "a metacharacter password authenticates verbatim" "200" \
+    "$(curl -s -o /dev/null -w '%{http_code}' \
+        -H 'Authorization: Bearer p@ss$HOME"quoted"`tick`' \
+        "${PASEO_URL}/api/status")"
+
+"${COMPOSE[@]}" down >/dev/null
+"${COMPOSE[@]}" up -d
+wait_for "paseo returns to the default configuration" 240 paseo_healthy
+
 echo "== a clean stop lets paseo finish =="
 # A clean shutdown removes paseo.pid; its absence after stop is the evidence
 # that s6 and Docker gave the supervisor enough time.

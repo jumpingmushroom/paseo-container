@@ -11,6 +11,7 @@ mkdir -p \
     "${AGENT_PREFIX}/state" \
     "${TOOL_PREFIX}/bin" \
     "${CONFIG_DIR}/git" \
+    "${CONFIG_DIR}/paseo" \
     "${CONFIG_DIR}/home"
 
 link_persist "${CONFIG_DIR}/git/gitconfig" "${USER_HOME}/.gitconfig"
@@ -64,6 +65,31 @@ if [ -s "${GIT_CREDENTIALS}" ]; then
         "url.https://${GIT_TOKEN_HOST}/.insteadOf" "git@${GIT_TOKEN_HOST}:"
 fi
 
+# Paseo's relay is off on a fresh install. You seed it on, once, in config.json
+# rather than with PASEO_RELAY_ENABLED: that variable locks the setting, and
+# the app could then never turn the relay off. A file that already exists is
+# yours, and is never rewritten.
+if [ ! -e "${CONFIG_DIR}/paseo/config.json" ]; then
+    printf '%s\n' '{"version":1,"daemon":{"relay":{"enabled":true}}}' \
+        > "${CONFIG_DIR}/paseo/config.json"
+    log "seeded ${CONFIG_DIR}/paseo/config.json with the relay on"
+fi
+
+# Paseo admits every LAN connection as owner when it has no password, so the
+# container always runs with one. Without PASEO_PASSWORD, you get a generated
+# password, created once and kept; the banner names the file, never the value.
+if [ -z "${PASEO_PASSWORD:-}" ] && [ ! -s "$PASEO_PASSWORD_FILE" ]; then
+    (
+        umask 077
+        # Read a fixed amount first: `tr < /dev/urandom | head` ends tr with
+        # SIGPIPE, which pipefail turns into a failed boot. The group and the
+        # `|| true` absorb that status; the length check catches a real failure.
+        { head -c 256 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32; } > "$PASEO_PASSWORD_FILE" || true
+        [ "$(wc -c < "$PASEO_PASSWORD_FILE")" -eq 32 ] || die "could not generate a password"
+    )
+    log "generated a LAN password in ${PASEO_PASSWORD_FILE}"
+fi
+
 # 01-user-setup already chowned the whole tree recursively earlier this boot,
 # so only the paths this script creates afterward need claiming here. A
 # second recursive chown over all of /config would re-walk agents/state,
@@ -79,6 +105,11 @@ chown "${PUID:-99}:${PGID:-100}" \
     "${CONFIG_DIR}/git" \
     "${CONFIG_DIR}/git/gitconfig" \
     "${CONFIG_DIR}/home"
+chown "${PUID:-99}:${PGID:-100}" "${CONFIG_DIR}/paseo" "${CONFIG_DIR}/paseo/config.json"
+if [ -e "$PASEO_PASSWORD_FILE" ]; then
+    chmod 0600 "$PASEO_PASSWORD_FILE"
+    chown "${PUID:-99}:${PGID:-100}" "$PASEO_PASSWORD_FILE"
+fi
 # An `[ -e ] && chown` one-liner here would end the script under `set -e` on
 # every boot with no credential file, taking the whole container with it.
 if [ -e "${GIT_CREDENTIALS}" ]; then
