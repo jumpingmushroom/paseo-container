@@ -96,6 +96,13 @@ assert_ok "first boot logged no agent install failure" \
 assert_ok "claude runs as paseo" dexec_user /config/agents/bin/claude --version
 # compose.yaml installs codex alongside claude by default.
 assert_ok "codex runs as paseo" dexec_user /config/agents/bin/codex --version
+# The sign-in commands the banner prints are plain `docker exec ... claude`,
+# which runs no login shell, so the agents must be on the image's own PATH.
+assert_ok "claude runs by bare name from docker exec" dexec_user claude --version
+assert_ok "codex runs by bare name from docker exec" dexec_user codex --version
+# shellcheck disable=SC2016 # $UV_TOOL_BIN_DIR must expand inside the container.
+assert_ok "uv env is set for docker exec" \
+    dexec_user sh -c '[ "$UV_TOOL_BIN_DIR" = /config/tools/bin ]'
 
 echo "== base image =="
 assert_eq "paseo user has PUID" "$PUID" "$(dexec id -u paseo | tr -d '\r')"

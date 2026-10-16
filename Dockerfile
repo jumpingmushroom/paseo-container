@@ -217,6 +217,18 @@ RUN set -eux; \
     find /etc/s6-overlay/s6-rc.d -type f \( -name run -o -name up \) -exec chmod 0755 {} +; \
     chmod 0755 /usr/local/bin/paseo-container-banner
 
+# `docker exec` runs no login shell, so /etc/profile.d never runs for it. The
+# image's own environment carries the agent and tool PATH and the uv settings
+# that profile.d sets, so `docker exec -u paseo paseo-container claude` works.
+# These come after every build step: uv must not install into /config at build
+# time.
+ENV PATH=/config/agents/bin:/config/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    UV_TOOL_DIR=/config/tools/uv/tools \
+    UV_TOOL_BIN_DIR=/config/tools/bin \
+    UV_PYTHON_INSTALL_DIR=/config/tools/uv/python \
+    UV_PYTHON_PREFERENCE=only-managed \
+    UV_CACHE_DIR=/config/tools/uv/cache
+
 EXPOSE 22 6767
 
 # The long start period covers the first boot, which installs agents and
